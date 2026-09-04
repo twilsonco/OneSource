@@ -294,6 +294,29 @@ def display_input_file(input_file: str, directory: Path) -> str:
         return input_file
 
 
+# --- Unit conversion -----------------------------------------------------------
+
+SQ_IN_PER_SQ_FT: float = 144.0
+
+
+def sq_ft(sq_in: float) -> float:
+    """Convert an area from square inches to square feet."""
+    return sq_in / SQ_IN_PER_SQ_FT
+
+
+def with_sq_ft(values: dict[str, object]) -> dict[str, object]:
+    """Return ``values`` with a ``*_sq_ft`` sibling for every ``*_sq_in`` entry.
+
+    Keeps the JSON report in lockstep with the text report, which shows both
+    units; consumers can read whichever they prefer.
+    """
+    extended = dict(values)
+    for key, value in values.items():
+        if key.endswith("_sq_in") and isinstance(value, int | float):
+            extended[f"{key[: -len('in')]}ft"] = sq_ft(float(value))
+    return extended
+
+
 # --- Report generation ---------------------------------------------------------
 
 
@@ -319,18 +342,18 @@ def write_consolidated_report_json(
             "total_jobs": metrics.total_jobs,
             "report_files": [str(r.path) for r in reports],
         },
-        "global": asdict(metrics),
+        "global": with_sq_ft(asdict(metrics)),
         "jobs": [
             {
                 "input_file": r.input_file,
                 "report_file": str(r.path),
                 "page_width_in": r.page_width_in,
                 "copies_per_label": r.copies_per_label,
-                "global": asdict(r.global_metrics),
+                "global": with_sq_ft(asdict(r.global_metrics)),
             }
             for r in reports
         ],
-        "per_label": [asdict(label) for label in labels],
+        "per_label": [with_sq_ft(asdict(label)) for label in labels],
     }
     out_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
@@ -366,10 +389,12 @@ def write_consolidated_report(
     lines.append(subrule)
     lines.append(
         f"Total Substrate Required:  {metrics.total_substrate_sq_in:>10.2f} sq in"
-        f"   ({metrics.linear_feet:.2f} linear feet of {roll_desc} roll)"
+        f" ({sq_ft(metrics.total_substrate_sq_in):>9.2f} sq ft)"
     )
+    lines.append(f"{'':27}({metrics.linear_feet:.2f} linear feet of {roll_desc} roll)")
     lines.append(
         f"Total Label Area:          {metrics.total_label_material_sq_in:>10.2f} sq in"
+        f" ({sq_ft(metrics.total_label_material_sq_in):>9.2f} sq ft)"
     )
     lines.append(f"Material Yield:            {metrics.material_yield_pct:>10.2f} %")
     lines.append("")
@@ -378,6 +403,7 @@ def write_consolidated_report(
     lines.append(subrule)
     lines.append(
         f"Total Ink Area:            {metrics.total_ink_area_sq_in:>10.2f} sq in"
+        f" ({sq_ft(metrics.total_ink_area_sq_in):>9.2f} sq ft)"
     )
     lines.append(
         f"Average Ink Coverage:      {metrics.average_ink_coverage_pct:>10.2f} %"
@@ -390,16 +416,19 @@ def write_consolidated_report(
     lines.append(subrule)
     lines.append(
         f"{'Input File':<38} | {'Roll':>5} | {'Labels':>6} | {'Lin Ft':>9} | "
-        f"{'Ink (sq in)':>11}"
+        f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
     )
-    lines.append(f"{'-' * 38}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 9}-+-{'-' * 11}")
+    lines.append(
+        f"{'-' * 38}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 9}-+-{'-' * 11}-+-{'-' * 11}"
+    )
     for report in reports:
         gm = report.global_metrics
         input_file = display_input_file(report.input_file, directory)
         lines.append(
             f"{input_file:<38} | {report.page_width_in:>5.0f} | "
             f"{gm.total_output_labels:>6d} | {gm.linear_feet:>9.2f} | "
-            f"{gm.total_ink_area_sq_in:>11.2f}"
+            f"{gm.total_ink_area_sq_in:>11.2f} | "
+            f"{sq_ft(gm.total_ink_area_sq_in):>11.2f}"
         )
     lines.append("")
     lines.append(subrule)
@@ -407,13 +436,16 @@ def write_consolidated_report(
     lines.append(subrule)
     lines.append(
         f"{'Label Code':<16} | {'Jobs':>4} | {'Copies':>5} | {'Chars':>5} | "
-        f"{'Ink Area (sq in)':>16}"
+        f"{'Ink Area (sq in)':>16} | {'Ink Area (sq ft)':>16}"
     )
-    lines.append(f"{'-' * 16}-+-{'-' * 4}-+-{'-' * 5}-+-{'-' * 5}-+-{'-' * 18}")
+    lines.append(
+        f"{'-' * 16}-+-{'-' * 4}-+-{'-' * 5}-+-{'-' * 5}-+-{'-' * 18}-+-{'-' * 18}"
+    )
     for label in labels:
         lines.append(
             f"{label.text:<16} | {label.jobs:>4d} | {label.instances:>5d} | "
-            f"{label.char_count:>5d} | {label.ink_area_sq_in:>16.4f}"
+            f"{label.char_count:>5d} | {label.ink_area_sq_in:>16.4f} | "
+            f"{sq_ft(label.ink_area_sq_in):>16.4f}"
         )
     lines.append(rule)
     lines.append("")
