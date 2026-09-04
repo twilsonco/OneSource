@@ -2,7 +2,9 @@
 
 Reads a list of label codes from a text file (one per line; ``#`` introduces a
 comment) and produces a continuous PDF suitable for printing and cutting,
-alongside a metrics text report covering material yield and ink usage.
+alongside a metrics text report (plus a machine-readable JSON sibling with the
+same data, for consolidating totals across jobs) covering material yield and
+ink usage.
 
 Layout summary (from the job's data file header):
     - Each label is 8in × 3in with 1/2in margins on all sides; hairline border.
@@ -42,7 +44,9 @@ Usage::
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+import json
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 from fontTools.pens.areaPen import AreaPen
@@ -521,6 +525,7 @@ class GlobalMetrics:
     material_yield_pct: float
     average_ink_coverage_pct: float
     page_height_in: float
+    linear_feet: float  # substrate length along the roll, in linear feet
 
 
 def calculate_metrics(
@@ -567,11 +572,44 @@ def calculate_metrics(
         material_yield_pct=material_yield,
         average_ink_coverage_pct=average_ink_coverage,
         page_height_in=page_h_in,
+        linear_feet=total_substrate / PAGE_W_IN / 12.0,
     )
     return per_label, global_metrics
 
 
 # --- Report generation --------------------------------------------------------
+
+
+def write_metrics_report_json(
+    per_label: list[LabelMetrics],
+    global_metrics: GlobalMetrics,
+    out_path: Path,
+    input_path: Path,
+    pdf_path: Path,
+    timestamp: str,
+) -> None:
+    """Write a machine-readable JSON metrics report to ``out_path``.
+
+    The schema is a fixed top-level shape (``job`` metadata plus the full
+    ``global`` and ``per_label`` metric dicts) so that reports from multiple
+    jobs can be loaded and summed for total material/ink usage. All areas are
+    in square inches and all lengths in inches, except ``linear_feet`` (the
+    substrate length along the roll, in feet).
+    """
+    report = {
+        "job": {
+            "generated": timestamp,
+            "input_file": str(input_path),
+            "output_pdf": str(pdf_path),
+            "page_width_in": PAGE_W_IN,
+            "label_width_in": LABEL_W_IN,
+            "label_height_in": LABEL_H_IN,
+            "copies_per_label": COPIES_PER_LABEL,
+        },
+        "global": asdict(global_metrics),
+        "per_label": [asdict(m) for m in per_label],
+    }
+    out_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
 def write_metrics_report(
@@ -580,11 +618,14 @@ def write_metrics_report(
     out_path: Path,
     input_path: Path,
     pdf_path: Path,
-) -> None:
-    """Write a human-readable metrics report to ``out_path``."""
-    from datetime import datetime
+) -> Path:
+    """Write a human-readable metrics report to ``out_path``.
 
-    linear_feet = global_metrics.total_substrate_sq_in / PAGE_W_IN / 12.0
+    Also writes a machine-readable JSON sibling report next to it (the
+    ``.txt`` suffix, if any, is replaced with ``.json``) so that totals can be
+    consolidated across jobs. Returns the path of the JSON report.
+    """
+    linear_feet = global_metrics.linear_feet
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     lines: list[str] = []
@@ -637,6 +678,12 @@ def write_metrics_report(
     lines.append("")
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
+
+    json_path = out_path.with_suffix(".json")
+    write_metrics_report_json(
+        per_label, global_metrics, json_path, input_path, pdf_path, timestamp
+    )
+    return json_path
 
 
 # --- Drawing ------------------------------------------------------------------
@@ -991,18 +1038,21 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"No labels found in {config.input_path}")
 
     out_path = config.output_path or config.input_path.with_suffix(".pdf")
+    if config.vertical_labels:
+        out_path = out_path.with_name(f"{out_path.stem}_vertical{out_path.suffix}")
     report_path = out_path.with_name(f"{out_path.stem}_report.txt")
 
     font_name, font_path = _register_bold_font(config.font_path)
     per_label, global_metrics = calculate_metrics(labels, font_name, font_path)
     n = build_pdf(labels, out_path, per_label, config.font_path)
-    write_metrics_report(
+    json_report_path = write_metrics_report(
         per_label, global_metrics, report_path, config.input_path, out_path
     )
     print(
         f"Wrote {n} label instances "
         f"({len(labels)} unique x {COPIES_PER_LABEL}) to {out_path}\n"
-        f"Wrote metrics report to {report_path}"
+        f"Wrote metrics report to {report_path}\n"
+        f"Wrote JSON metrics report to {json_report_path}"
     )
 
 
