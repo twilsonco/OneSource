@@ -672,49 +672,36 @@ def draw_label(
 ) -> None:
     """Draw a single label at the given bottom-left position (in inches).
 
-    Within the label, the text is centered horizontally in the text area and
-    its baseline sits flush with the inner edge of the bottom margin so the cap
-    height fills the text area from bottom margin to top margin. ``scale`` is
+    The text is centered at the midpoint of the label's footprint. ``scale`` is
     the precomputed horizontal compression factor (see
     :func:`compute_horizontal_scale`) — passing it in keeps the PDF and the
     metrics report in lockstep.
 
     ``x_in``/``y_in`` are the label's on-page footprint bottom-left. With
-    ``VERTICAL_LABELS`` the whole label is rotated 90° clockwise: the text is
-    laid out in the label's design coordinates and the canvas transform maps
-    design point (u, v) to footprint point (v, LABEL_W_IN - u), so the text
+    ``VERTICAL_LABELS`` the whole label is rotated 90° clockwise so the text
     reads top-to-bottom and the reader turns their head clockwise to read it.
     """
-    text_x0_in = x_in + LABEL_H_MARGIN_IN
-    text_baseline_in = y_in + LABEL_V_MARGIN_IN
-    text_w_in = LABEL_W_IN - 2 * LABEL_H_MARGIN_IN
-
-    natural_w_pt = c.stringWidth(text, font_name, FONT_SIZE_PT)
-    natural_w_in = natural_w_pt / 72.0
-    drawn_w_in = natural_w_in * scale
-    text_x_in = text_x0_in + (text_w_in - drawn_w_in) / 2.0  # horizontal center
+    # Compute the midpoint of the label's footprint
+    midpoint_x_in = x_in + FOOT_W_IN / 2
+    midpoint_y_in = y_in + FOOT_H_IN / 2
 
     c.saveState()
     if VERTICAL_LABELS:
-        # Rotate 90° clockwise: design point (u, v) maps to footprint point (x_in + v, y_in + LABEL_W_IN - u).
-        # Transform matrix [0, -1; 1, 0] produces (u, v) → (v, -u); with offset (x_in, y_in + LABEL_W_IN)
-        # this gives page_x = v + x_in, page_y = -u + y_in + LABEL_W_IN.
-        # Transform coefficients: (x,y) → (0*x + 1*y + e, -1*x + 0*y + f) = (y + e, -x + f)
-        c.transform(0.0, -1.0, 1.0, 0.0, x_in * 72.0, (y_in + LABEL_W_IN) * 72.0)
-        # After rotation, axes are: new_x=v (design v-axis), new_y=-u (negative design u-axis).
-        # Apply margins: moving along v-axis (new_x) by LABEL_V_MARGIN_IN (top→left), and
-        # moving along -u-axis (new_y) by -LABEL_H_MARGIN_IN (left→down in rotated frame).
-        c.translate(LABEL_V_MARGIN_IN * 72.0, -LABEL_H_MARGIN_IN * 72.0)
+        # Translate to midpoint in page space
+        c.translate(midpoint_x_in * 72.0, midpoint_y_in * 72.0)
+        # Apply 90° clockwise rotation (ReportLab uses CCW, so -90°)
+        c.rotate(-90)
+        # Apply horizontal scaling
         c.scale(scale, 1.0)
-        # Center within the text area (which now spans along the new_x axis).
-        centering_pt = (text_w_in - drawn_w_in) / 2.0 * 72.0
-        c.translate(centering_pt, 0.0)
     else:
-        c.translate(text_x_in * 72.0, text_baseline_in * 72.0)
+        # Translate to midpoint in page space
+        c.translate(midpoint_x_in * 72.0, midpoint_y_in * 72.0)
+        # Apply horizontal scaling
         c.scale(scale, 1.0)
     c.setFont(font_name, FONT_SIZE_PT)
     c.setFillColor(black)
-    c.drawString(0, 0, text)
+    # Draw text centered at the origin (which is now at the midpoint after translate)
+    c.drawCentredString(0, 0, text)
     c.restoreState()
 
 
