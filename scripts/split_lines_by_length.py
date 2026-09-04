@@ -169,12 +169,10 @@ def main(argv: list[str] | None = None) -> int:
     # from every input file in sorted-file order.
     per_file: dict[tuple[str, int], list[str]] = {}
     combined_buffers: dict[int, list[str]] = {index: [] for index in combined_indices}
-    total_per_bucket = [0] * len(uppers)
 
     for path in files:
         for line in read_stripped_lines(path):
             index = bucket_index(len(line), uppers)
-            total_per_bucket[index] += 1
             if index in combined_indices:
                 combined_buffers[index].append(line)
             else:
@@ -183,26 +181,31 @@ def main(argv: list[str] | None = None) -> int:
     output_dir = directory / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    names_per_bucket: dict[int, list[str]] = {}
+    # Per-bucket report rows of (output file name, lines written), filled as
+    # each output file is written.
+    rows_per_bucket: dict[int, list[tuple[str, int]]] = {}
     for (name, index), lines in per_file.items():
         out_path = output_dir / f"{Path(name).stem}_{uppers[index]}-chars.txt"
         write_lines(out_path, lines)
-        names_per_bucket.setdefault(index, []).append(out_path.name)
+        rows_per_bucket.setdefault(index, []).append((out_path.name, len(lines)))
     for index, lines in combined_buffers.items():
         if not lines:
             continue
         out_path = output_dir / f"{uppers[index]}-chars.txt"
         write_lines(out_path, lines)
-        names_per_bucket.setdefault(index, []).append(out_path.name)
+        rows_per_bucket.setdefault(index, []).append((out_path.name, len(lines)))
 
     print(f"split {len(files)} files from {directory} into {output_dir}")
-    for index, upper in enumerate(uppers):
-        names = sorted(names_per_bucket.get(index, []))
-        targets = ", ".join(names) if names else "(no matching lines)"
-        print(
-            f"  {range_label(index, uppers):>6} chars: "
-            f"{total_per_bucket[index]:>6} lines -> {targets}"
-        )
+    for index in range(len(uppers)):
+        rows = sorted(rows_per_bucket.get(index, []))
+        total = sum(count for _, count in rows)
+        print(f"  {range_label(index, uppers)} chars ({total} lines):")
+        if rows:
+            name_width = max(len(name) for name, _ in rows)
+            for name, count in rows:
+                print(f"    {name:<{name_width}}  {count}")
+        else:
+            print("    (no matching lines)")
     return 0
 
 
