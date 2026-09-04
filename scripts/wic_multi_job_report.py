@@ -458,6 +458,10 @@ def write_consolidated_report(
         lines.append(
             f"{format_label_size(size):<16} | {jobs_per_size[size]:>4d} | {count:>6d}"
         )
+    lines.append(f"{'=' * 16}=+={'=' * 4}=+={'=' * 6}")
+    lines.append(
+        f"{'Total':<16} | {metrics.total_jobs:>4d} | {metrics.total_output_labels:>6d}"
+    )
     lines.append("")
     lines.append(subrule)
     lines.append("JOB BREAKDOWN")
