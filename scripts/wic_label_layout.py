@@ -34,18 +34,26 @@ Layout summary (from the job's data file header):
 Every value above is only a default: each option constant in this module is
 also exposed as an optional command-line flag (see :func:`parse_args`).
 
+``-i/--input`` accepts a glob pattern (quote it so the shell passes it
+through, e.g. ``-i "*6-chars.txt"`` or ``-i "data/WIC/*/*.txt"``). Every
+matching file is processed in sorted order, each producing its own PDF and
+metrics reports named after the matched file. ``-o/--output`` may only be
+combined with a pattern that matches a single file.
+
 Usage::
 
     uv run python scripts/wic_label_layout.py -i "data/2027-7-2 WIC.txt"
     uv run python scripts/wic_label_layout.py -i input.txt -o out/labels.pdf
     uv run python scripts/wic_label_layout.py -i input.txt --label-height 4 --copies 3
+    uv run python scripts/wic_label_layout.py -i "data/WIC/*/*6-chars.txt"
 """
 
 from __future__ import annotations
 
 import argparse
+import glob
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -375,6 +383,25 @@ def _register_bold_font(preferred_path: Path | None = None) -> tuple[str, str | 
 
 
 # --- Parsing ------------------------------------------------------------------
+
+
+def _is_glob_pattern(pattern: str) -> bool:
+    """Whether ``pattern`` contains glob metacharacters."""
+    return any(char in pattern for char in "*?[")
+
+
+def expand_input_paths(pattern: Path) -> list[Path]:
+    """Return the input files matched by ``pattern``, in sorted order.
+
+    A plain path is returned as-is (even if it does not exist, so the caller
+    can report a useful error). A glob pattern is expanded with ``**``
+    supported for recursive matching, and directories are dropped.
+    """
+    raw = str(pattern)
+    if not _is_glob_pattern(raw):
+        return [pattern]
+    matches = (Path(p) for p in glob.glob(raw, recursive=True))
+    return sorted((p for p in matches if p.is_file()), key=lambda p: str(p))
 
 
 def parse_labels(path: Path) -> list[str]:
@@ -868,14 +895,17 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         "--input",
         type=Path,
         required=True,
-        help="Path to the labels text file (one code per line; '#' comments are ignored).",
+        help="Path to the labels text file (one code per line; '#' comments are "
+        "ignored). May be a glob pattern (quote it, e.g. '*6-chars.txt'), in "
+        "which case every matching file is processed in sorted order.",
     )
     parser.add_argument(
         "-o",
         "--output",
         type=Path,
         default=None,
-        help="Path to write the PDF (default: <input>.pdf next to the input).",
+        help="Path to write the PDF (default: <input>.pdf next to the input). "
+        "Only allowed when --input matches a single file.",
     )
     parser.add_argument(
         "--font",
@@ -1029,10 +1059,8 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
     return config
 
 
-def main(argv: list[str] | None = None) -> None:
-    config = parse_args(argv)
-    apply_layout_config(config)
-
+def process_job(config: JobConfig) -> None:
+    """Generate the PDF and metrics reports for a single resolved input file."""
     labels = parse_labels(config.input_path)
     if not labels:
         raise SystemExit(f"No labels found in {config.input_path}")
@@ -1054,6 +1082,32 @@ def main(argv: list[str] | None = None) -> None:
         f"Wrote metrics report to {report_path}\n"
         f"Wrote JSON metrics report to {json_report_path}"
     )
+
+
+def main(argv: list[str] | None = None) -> None:
+    config = parse_args(argv)
+
+    input_paths = expand_input_paths(config.input_path)
+    if not input_paths:
+        raise SystemExit(f"No input files matched {config.input_path}")
+    if config.output_path is not None and len(input_paths) > 1:
+        raise SystemExit(
+            "-o/--output cannot be used when --input matches multiple files "
+            f"({len(input_paths)} matched {config.input_path}); omit -o to name "
+            "each PDF after its input file"
+        )
+
+    apply_layout_config(config)
+
+    # Register the font once up front so a bad --font fails before any output.
+    _register_bold_font(config.font_path)
+
+    for idx, input_path in enumerate(input_paths):
+        if len(input_paths) > 1:
+            print(f"\n[{idx + 1}/{len(input_paths)}] {input_path}")
+        # ``-o`` is rejected above when more than one file matched, so it is
+        # safe to carry through here for the single-file case.
+        process_job(replace(config, input_path=input_path))
 
 
 if __name__ == "__main__":
