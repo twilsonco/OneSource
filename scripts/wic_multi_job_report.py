@@ -34,7 +34,12 @@ _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
-from wic_label_layout import GlobalMetrics, LabelMetrics  # noqa: E402
+from wic_label_layout import (  # noqa: E402
+    GlobalMetrics,
+    LabelMetrics,
+    sq_ft,
+    with_sq_ft,
+)
 
 # --- Input model ---------------------------------------------------------------
 
@@ -292,29 +297,6 @@ def display_input_file(input_file: str, directory: Path) -> str:
         return str(Path(input_file).resolve().relative_to(directory.resolve()))
     except ValueError:
         return input_file
-
-
-# --- Unit conversion -----------------------------------------------------------
-
-SQ_IN_PER_SQ_FT: float = 144.0
-
-
-def sq_ft(sq_in: float) -> float:
-    """Convert an area from square inches to square feet."""
-    return sq_in / SQ_IN_PER_SQ_FT
-
-
-def with_sq_ft(values: dict[str, object]) -> dict[str, object]:
-    """Return ``values`` with a ``*_sq_ft`` sibling for every ``*_sq_in`` entry.
-
-    Keeps the JSON report in lockstep with the text report, which shows both
-    units; consumers can read whichever they prefer.
-    """
-    extended = dict(values)
-    for key, value in values.items():
-        if key.endswith("_sq_in") and isinstance(value, int | float):
-            extended[f"{key[: -len('in')]}ft"] = sq_ft(float(value))
-    return extended
 
 
 # --- Report generation ---------------------------------------------------------

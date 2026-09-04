@@ -604,6 +604,29 @@ def calculate_metrics(
     return per_label, global_metrics
 
 
+# --- Unit conversion ----------------------------------------------------------
+
+SQ_IN_PER_SQ_FT: float = 144.0
+
+
+def sq_ft(sq_in: float) -> float:
+    """Convert an area from square inches to square feet."""
+    return sq_in / SQ_IN_PER_SQ_FT
+
+
+def with_sq_ft(values: dict[str, object]) -> dict[str, object]:
+    """Return ``values`` with a ``*_sq_ft`` sibling for every ``*_sq_in`` entry.
+
+    Keeps the JSON reports in lockstep with the text reports, which show both
+    units; consumers can read whichever they prefer.
+    """
+    extended = dict(values)
+    for key, value in values.items():
+        if key.endswith("_sq_in") and isinstance(value, int | float):
+            extended[f"{key[: -len('in')]}ft"] = sq_ft(float(value))
+    return extended
+
+
 # --- Report generation --------------------------------------------------------
 
 
@@ -621,7 +644,8 @@ def write_metrics_report_json(
     ``global`` and ``per_label`` metric dicts) so that reports from multiple
     jobs can be loaded and summed for total material/ink usage. All areas are
     in square inches and all lengths in inches, except ``linear_feet`` (the
-    substrate length along the roll, in feet).
+    substrate length along the roll, in feet); every ``*_sq_in`` area also gets
+    a derived ``*_sq_ft`` sibling in square feet.
     """
     report = {
         "job": {
@@ -633,8 +657,8 @@ def write_metrics_report_json(
             "label_height_in": LABEL_H_IN,
             "copies_per_label": COPIES_PER_LABEL,
         },
-        "global": asdict(global_metrics),
-        "per_label": [asdict(m) for m in per_label],
+        "global": with_sq_ft(asdict(global_metrics)),
+        "per_label": [with_sq_ft(asdict(m)) for m in per_label],
     }
     out_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
@@ -670,10 +694,12 @@ def write_metrics_report(
     lines.append(subrule)
     lines.append(
         f"Total Substrate Required:  {global_metrics.total_substrate_sq_in:>10.2f} sq in"
-        f"   ({linear_feet:.2f} linear feet of {PAGE_W_IN:.0f}in roll)"
+        f" ({sq_ft(global_metrics.total_substrate_sq_in):>9.2f} sq ft)"
     )
+    lines.append(f"{'':27}({linear_feet:.2f} linear feet of {PAGE_W_IN:.0f}in roll)")
     lines.append(
         f"Total Label Area:          {global_metrics.total_label_material_sq_in:>10.2f} sq in"
+        f" ({sq_ft(global_metrics.total_label_material_sq_in):>9.2f} sq ft)"
     )
     lines.append(
         f"Material Yield:            {global_metrics.material_yield_pct:>10.2f} %"
@@ -684,6 +710,7 @@ def write_metrics_report(
     lines.append(subrule)
     lines.append(
         f"Total Ink Area:            {global_metrics.total_ink_area_sq_in:>10.2f} sq in"
+        f" ({sq_ft(global_metrics.total_ink_area_sq_in):>9.2f} sq ft)"
     )
     lines.append(
         f"Average Ink Coverage:      {global_metrics.average_ink_coverage_pct:>10.2f} %"
@@ -694,12 +721,13 @@ def write_metrics_report(
     lines.append("PER-TAG BREAKDOWN")
     lines.append(subrule)
     lines.append(
-        f"{'Label Code':<16} | {'Chars':>5} | {'Scale':>8} | {'Ink Area (sq in)':>16}"
+        f"{'Label Code':<16} | {'Chars':>5} | {'Scale':>8} | "
+        f"{'Ink Area (sq in)':>16} | {'Ink Area (sq ft)':>16}"
     )
-    lines.append(f"{'-' * 16}-+-{'-' * 5}-+-{'-' * 8}-+-{'-' * 18}")
+    lines.append(f"{'-' * 16}-+-{'-' * 5}-+-{'-' * 8}-+-{'-' * 18}-+-{'-' * 18}")
     for m in per_label:
         lines.append(
-            f"{m.text:<16} | {m.char_count:>5d} | {m.horizontal_scale:>8.3f} | {m.ink_area_sq_in:>16.4f}"
+            f"{m.text:<16} | {m.char_count:>5d} | {m.horizontal_scale:>8.3f} | {m.ink_area_sq_in:>16.4f} | {sq_ft(m.ink_area_sq_in):>16.4f}"
         )
     lines.append(rule)
     lines.append("")
