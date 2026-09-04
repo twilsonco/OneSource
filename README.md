@@ -51,10 +51,12 @@ usage.
   vertical gap.
 - `--vertical-labels` rotates each label's border and text 90° clockwise so the
   text reads top-to-bottom (turn your head clockwise to read it). The label
-  keeps its internal design, so `--label-width`/`--label-height` and the sheet
-  grid flags still describe the *unrotated* label; on the page the footprint
-  swaps width/height and the grid transposes (8×3in labels in a 3×8 grid become
-  3×8in footprints in an 8×3 grid).
+  keeps its internal design, so `--label-width`/`--label-height` still describe
+  the *unrotated* label and the on-page footprint swaps width/height (8×3in
+  labels become 3×8in footprints). When both sheet counts are fixed the grid
+  transposes too (a 3×8 grid becomes 8×3); an auto (`0`) count instead stays on
+  its own page axis, so vertical labels still fill the page width / flow
+  unbounded with the default flags.
 
 **Input format**
 

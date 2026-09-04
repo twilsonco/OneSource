@@ -23,10 +23,11 @@ Layout summary (from the job's data file header):
       sheet of unbounded height with no vertical gap.
     - --vertical-labels rotates each label's border and text 90 degrees
       clockwise (text reads top-to-bottom). The label keeps its internal
-      design, so --label-width/--label-height and the sheet grid flags keep
-      describing the unrotated label; on the page the footprint swaps
-      width/height and the grid transposes (8x3 labels in a 3x8 grid become
-      3x8 footprints in an 8x3 grid).
+      design, so --label-width/--label-height keep describing the unrotated
+      label and the on-page footprint swaps width/height (8x3 labels become
+      3x8 footprints). When both sheet counts are fixed, the grid transposes
+      too (a 3x8 grid becomes 8x3); an auto (0) count instead stays on its own
+      page axis, so the labels still fill the page width / flow unbounded.
 
 Every value above is only a default: each option constant in this module is
 also exposed as an optional command-line flag (see :func:`parse_args`).
@@ -72,8 +73,9 @@ LABEL_V_MARGIN_IN: float = 0.5  # top/bottom margin inside each label
 # keeps its internal design (text area, margins, cap height) and is rotated as
 # a unit, so LABEL_W_IN/LABEL_H_IN stay the *design* dimensions used for text
 # layout while FOOT_W_IN/FOOT_H_IN are the on-page footprint used for
-# positioning: with vertical labels the footprint swaps width/height and the
-# sheet grid transposes (columns <-> rows).
+# positioning: with vertical labels the footprint swaps width/height, and when
+# both sheet counts are fixed the grid transposes (columns <-> rows). An auto
+# (0) count is a page-space directive and stays on its own axis.
 VERTICAL_LABELS: bool = False
 FOOT_W_IN: float = LABEL_W_IN  # footprint width (== label height when vertical)
 FOOT_H_IN: float = LABEL_H_IN  # footprint height (== label width when vertical)
@@ -197,16 +199,32 @@ class JobConfig:
         return self.label_w_in if self.vertical_labels else self.label_h_in
 
     @property
+    def _transpose_grid(self) -> bool:
+        """Whether vertical labels transpose the sheet grid.
+
+        Only fixed counts transpose (they describe a design-space rectangle).
+        An auto (0) count is a page-space directive — "fill the page width" or
+        "unbounded height" — and stays on its own page axis, so when either
+        count is auto the grid is used as given and only the footprint and the
+        label content rotate.
+        """
+        return (
+            self.vertical_labels
+            and self.labels_per_sheet_row != 0
+            and self.labels_per_sheet_col != 0
+        )
+
+    @property
     def eff_per_sheet_row(self) -> int:
-        """Labels across a sheet-row (raw, may be 0=auto); swapped when vertical."""
-        if self.vertical_labels:
+        """Labels across a sheet-row (raw, may be 0=auto); swapped when transposing."""
+        if self._transpose_grid:
             return self.labels_per_sheet_col
         return self.labels_per_sheet_row
 
     @property
     def eff_per_sheet_col(self) -> int:
-        """Labels down a sheet-column (raw, may be 0=auto); swapped when vertical."""
-        if self.vertical_labels:
+        """Labels down a sheet-column (raw, may be 0=auto); swapped when transposing."""
+        if self._transpose_grid:
             return self.labels_per_sheet_row
         return self.labels_per_sheet_col
 
@@ -678,10 +696,12 @@ def draw_label(
 
     c.saveState()
     if VERTICAL_LABELS:
-        # Rotate 90° clockwise: design (u, v) -> footprint (v, LABEL_W_IN - u).
-        c.translate(x_in * 72.0, y_in * 72.0)
-        c.transform(0.0, -1.0, 1.0, 0.0, LABEL_W_IN * 72.0, 0.0)
-        c.translate(LABEL_H_MARGIN_IN * 72.0, LABEL_V_MARGIN_IN * 72.0)
+        # Rotate 90° clockwise: design point (u, v) maps to footprint point (x_in + v, y_in + u).
+        # This requires the transform matrix [0 1; 1 0] with translation (x_in, y_in).
+        # Transform coefficients: (x,y) -> (0*x + 1*y + x_in, 1*x + 0*y + y_in) = (y + x_in, x + y_in)
+        c.transform(0.0, 1.0, 1.0, 0.0, x_in * 72.0, y_in * 72.0)
+        # Apply margins: after rotation, the horizontal margin applies vertically.
+        c.translate(LABEL_V_MARGIN_IN * 72.0, LABEL_H_MARGIN_IN * 72.0)
         c.scale(scale, 1.0)
         # Center within the design text area (x is now the design u axis).
         centering_pt = (text_w_in - drawn_w_in) / 2.0 * 72.0
@@ -874,10 +894,10 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         action=argparse.BooleanOptionalAction,
         default=VERTICAL_LABELS,
         help="Rotate each label's border and text 90 degrees clockwise so the "
-        "text reads top-to-bottom. Swaps the label's on-page width/height and "
-        "transposes the sheet grid, so --label-width/--label-height and "
-        "--labels-per-sheet-row/--labels-per-sheet-col keep describing the "
-        "unrotated label.",
+        "text reads top-to-bottom. Swaps the label's on-page width/height, so "
+        "--label-width/--label-height keep describing the unrotated label. "
+        "With fixed sheet counts the grid transposes too; an auto (0) count "
+        "keeps filling its own page axis.",
     )
 
     sheet = parser.add_argument_group(
