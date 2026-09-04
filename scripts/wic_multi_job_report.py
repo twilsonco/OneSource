@@ -280,6 +280,20 @@ def roll_widths_in(reports: list[JobReport]) -> list[float]:
     return sorted({report.page_width_in for report in reports})
 
 
+def display_input_file(input_file: str, directory: Path) -> str:
+    """Return ``input_file`` relative to ``directory`` when it lies inside it.
+
+    The per-job reports store the input path as it was passed to
+    ``wic_label_layout.py``; for the job-breakdown table the source directory
+    prefix is noise, so it is stripped. Paths outside ``directory`` (or that
+    otherwise cannot be made relative) are returned unchanged.
+    """
+    try:
+        return str(Path(input_file).resolve().relative_to(directory.resolve()))
+    except ValueError:
+        return input_file
+
+
 # --- Report generation ---------------------------------------------------------
 
 
@@ -375,15 +389,16 @@ def write_consolidated_report(
     lines.append("JOB BREAKDOWN")
     lines.append(subrule)
     lines.append(
-        f"{'Input File':<38} | {'Roll':>5} | {'Labels':>6} | {'Lin Ft':>7} | "
+        f"{'Input File':<38} | {'Roll':>5} | {'Labels':>6} | {'Lin Ft':>9} | "
         f"{'Ink (sq in)':>11}"
     )
-    lines.append(f"{'-' * 38}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 7}-+-{'-' * 11}")
+    lines.append(f"{'-' * 38}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 9}-+-{'-' * 11}")
     for report in reports:
         gm = report.global_metrics
+        input_file = display_input_file(report.input_file, directory)
         lines.append(
-            f"{report.input_file:<38} | {report.page_width_in:>5.0f} | "
-            f"{gm.total_output_labels:>6d} | {gm.linear_feet:>7.2f} | "
+            f"{input_file:<38} | {report.page_width_in:>5.0f} | "
+            f"{gm.total_output_labels:>6d} | {gm.linear_feet:>9.2f} | "
             f"{gm.total_ink_area_sq_in:>11.2f}"
         )
     lines.append("")
@@ -391,7 +406,7 @@ def write_consolidated_report(
     lines.append("PER-TAG BREAKDOWN")
     lines.append(subrule)
     lines.append(
-        f"{'Label Code':<16} | {'Jobs':>4} | {'Inst':>5} | {'Chars':>5} | "
+        f"{'Label Code':<16} | {'Jobs':>4} | {'Copies':>5} | {'Chars':>5} | "
         f"{'Ink Area (sq in)':>16}"
     )
     lines.append(f"{'-' * 16}-+-{'-' * 4}-+-{'-' * 5}-+-{'-' * 5}-+-{'-' * 18}")
