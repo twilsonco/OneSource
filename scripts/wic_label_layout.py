@@ -53,6 +53,7 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+from collections import Counter
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -627,6 +628,37 @@ def with_sq_ft(values: dict[str, object]) -> dict[str, object]:
     return extended
 
 
+# --- Label sizes ---------------------------------------------------------------
+
+# A label size is its (width, height) design dimensions in inches; vertical
+# labels keep the unrotated design size so counts consolidate across orientations.
+LabelSize = tuple[float, float]
+
+
+def job_label_sizes(global_metrics: GlobalMetrics) -> Counter[LabelSize]:
+    """Return printed-label counts keyed by label size for a single job.
+
+    A job prints every label at the same (design) size, so this is a single
+    ``{(w, h): total_output_labels}`` entry; the ``Counter`` keeps it
+    compatible with multi-job consolidation, which merges many such counters.
+    """
+    return Counter({(LABEL_W_IN, LABEL_H_IN): global_metrics.total_output_labels})
+
+
+def format_label_size(size: LabelSize) -> str:
+    """Render a ``(width_in, height_in)`` pair as e.g. ``8x3``."""
+    width_in, height_in = size
+    return f"{width_in:g}x{height_in:g}"
+
+
+def label_sizes_to_json(sizes: Counter[LabelSize]) -> list[dict[str, float | int]]:
+    """Convert a :data:`LabelSize` counter to a JSON-friendly list sorted by size."""
+    return [
+        {"width_in": width_in, "height_in": height_in, "labels": count}
+        for (width_in, height_in), count in sorted(sizes.items())
+    ]
+
+
 # --- Report generation --------------------------------------------------------
 
 
@@ -645,7 +677,8 @@ def write_metrics_report_json(
     jobs can be loaded and summed for total material/ink usage. All areas are
     in square inches and all lengths in inches, except ``linear_feet`` (the
     substrate length along the roll, in feet); every ``*_sq_in`` area also gets
-    a derived ``*_sq_ft`` sibling in square feet.
+    a derived ``*_sq_ft`` sibling in square feet. A ``label_sizes`` array counts
+    printed labels per unique label (design) size.
     """
     report = {
         "job": {
@@ -658,6 +691,7 @@ def write_metrics_report_json(
             "copies_per_label": COPIES_PER_LABEL,
         },
         "global": with_sq_ft(asdict(global_metrics)),
+        "label_sizes": label_sizes_to_json(job_label_sizes(global_metrics)),
         "per_label": [with_sq_ft(asdict(m)) for m in per_label],
     }
     out_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
@@ -716,6 +750,14 @@ def write_metrics_report(
         f"Average Ink Coverage:      {global_metrics.average_ink_coverage_pct:>10.2f} %"
     )
     lines.append(f"Total Character Count:     {global_metrics.total_characters:>10d}")
+    lines.append("")
+    lines.append(subrule)
+    lines.append("LABEL SIZE BREAKDOWN")
+    lines.append(subrule)
+    lines.append(f"{'Label Size (WxH)':<16} | {'Labels':>6}")
+    lines.append(f"{'-' * 16}-+-{'-' * 6}")
+    for size, count in sorted(job_label_sizes(global_metrics).items()):
+        lines.append(f"{format_label_size(size):<16} | {count:>6d}")
     lines.append("")
     lines.append(subrule)
     lines.append("PER-TAG BREAKDOWN")

@@ -37,6 +37,9 @@ if _SCRIPTS_DIR not in sys.path:
 from wic_label_layout import (  # noqa: E402
     GlobalMetrics,
     LabelMetrics,
+    LabelSize,
+    format_label_size,
+    label_sizes_to_json,
     sq_ft,
     with_sq_ft,
 )
@@ -53,6 +56,7 @@ class JobReport:
     page_width_in: float
     copies_per_label: int
     global_metrics: GlobalMetrics
+    label_sizes: Counter[LabelSize]
     per_label: list[LabelMetrics]
 
 
@@ -166,6 +170,42 @@ def _load_per_label(entries: list[object], path: Path) -> list[LabelMetrics]:
     return labels
 
 
+def _load_label_sizes(
+    report: dict[str, object],
+    job: dict[str, object],
+    global_metrics: GlobalMetrics,
+    path: Path,
+) -> Counter[LabelSize]:
+    """Return the report's printed-label counts keyed by label size.
+
+    New reports carry a ``label_sizes`` array. Reports written before that
+    field existed are derived from the job's single design size instead.
+    """
+    raw = report.get("label_sizes")
+    if raw is None:
+        return Counter(
+            {
+                (
+                    _as_float(job, "label_width_in", path),
+                    _as_float(job, "label_height_in", path),
+                ): global_metrics.total_output_labels
+            }
+        )
+    if not isinstance(raw, list):
+        raise SystemExit(f"{path}: 'label_sizes' is not a JSON array")
+    sizes: Counter[LabelSize] = Counter()
+    for idx, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise SystemExit(f"{path}: 'label_sizes[{idx}]' is not a JSON object")
+        item: dict[str, object] = {str(k): v for k, v in entry.items()}
+        size: LabelSize = (
+            _as_float(item, "width_in", path),
+            _as_float(item, "height_in", path),
+        )
+        sizes[size] += _as_int(item, "labels", path)
+    return sizes
+
+
 def load_report(path: Path) -> JobReport:
     """Parse a single ``*_report.json`` file into a :class:`JobReport`."""
     try:
@@ -190,6 +230,7 @@ def load_report(path: Path) -> JobReport:
         page_width_in=_as_float(job, "page_width_in", path),
         copies_per_label=_as_int(job, "copies_per_label", path),
         global_metrics=global_metrics,
+        label_sizes=_load_label_sizes(report, job, global_metrics, path),
         per_label=per_label,
     )
 
@@ -280,6 +321,14 @@ def consolidate_labels(reports: list[JobReport]) -> list[ConsolidatedLabel]:
     ]
 
 
+def consolidate_label_sizes(reports: list[JobReport]) -> Counter[LabelSize]:
+    """Merge every job's label-size counts into one counter."""
+    total: Counter[LabelSize] = Counter()
+    for report in reports:
+        total.update(report.label_sizes)
+    return total
+
+
 def roll_widths_in(reports: list[JobReport]) -> list[float]:
     """Return the distinct roll widths (inches) used across ``reports``, sorted."""
     return sorted({report.page_width_in for report in reports})
@@ -304,6 +353,7 @@ def display_input_file(input_file: str, directory: Path) -> str:
 
 def write_consolidated_report_json(
     metrics: ConsolidatedMetrics,
+    sizes: Counter[LabelSize],
     labels: list[ConsolidatedLabel],
     reports: list[JobReport],
     out_path: Path,
@@ -325,6 +375,7 @@ def write_consolidated_report_json(
             "report_files": [str(r.path) for r in reports],
         },
         "global": with_sq_ft(asdict(metrics)),
+        "label_sizes": label_sizes_to_json(sizes),
         "jobs": [
             {
                 "input_file": r.input_file,
@@ -332,6 +383,7 @@ def write_consolidated_report_json(
                 "page_width_in": r.page_width_in,
                 "copies_per_label": r.copies_per_label,
                 "global": with_sq_ft(asdict(r.global_metrics)),
+                "label_sizes": label_sizes_to_json(r.label_sizes),
             }
             for r in reports
         ],
@@ -342,6 +394,7 @@ def write_consolidated_report_json(
 
 def write_consolidated_report(
     metrics: ConsolidatedMetrics,
+    sizes: Counter[LabelSize],
     labels: list[ConsolidatedLabel],
     reports: list[JobReport],
     out_path: Path,
@@ -394,6 +447,19 @@ def write_consolidated_report(
     lines.append(f"Total Output Labels:       {metrics.total_output_labels:>10d}")
     lines.append("")
     lines.append(subrule)
+    lines.append("LABEL SIZE BREAKDOWN")
+    lines.append(subrule)
+    jobs_per_size: Counter[LabelSize] = Counter()
+    for report in reports:
+        jobs_per_size.update(report.label_sizes.keys())
+    lines.append(f"{'Label Size (WxH)':<16} | {'Jobs':>4} | {'Labels':>6}")
+    lines.append(f"{'-' * 16}-+-{'-' * 4}-+-{'-' * 6}")
+    for size, count in sorted(sizes.items()):
+        lines.append(
+            f"{format_label_size(size):<16} | {jobs_per_size[size]:>4d} | {count:>6d}"
+        )
+    lines.append("")
+    lines.append(subrule)
     lines.append("JOB BREAKDOWN")
     lines.append(subrule)
     lines.append(
@@ -436,7 +502,7 @@ def write_consolidated_report(
 
     json_path = out_path.with_suffix(".json")
     write_consolidated_report_json(
-        metrics, labels, reports, json_path, directory, timestamp
+        metrics, sizes, labels, reports, json_path, directory, timestamp
     )
     return json_path
 
@@ -478,9 +544,10 @@ def main(argv: list[str] | None = None) -> None:
 
     reports = load_reports(directory, skip)
     metrics = consolidate(reports)
+    sizes = consolidate_label_sizes(reports)
     labels = consolidate_labels(reports)
     json_report_path = write_consolidated_report(
-        metrics, labels, reports, out_path, directory
+        metrics, sizes, labels, reports, out_path, directory
     )
 
     print(
