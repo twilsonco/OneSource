@@ -700,8 +700,12 @@ def draw_label(
         c.scale(scale, 1.0)
     c.setFont(font_name, FONT_SIZE_PT)
     c.setFillColor(black)
-    # Draw text centered at the origin (which is now at the midpoint after translate)
-    c.drawCentredString(0, 0, text)
+    # Draw text centered at the origin, with vertical offset to center the cap height.
+    # drawCentredString centers horizontally but places the baseline at y;
+    # shift down by half the cap height so the text's middle is at the midpoint.
+    cap_height_pt = FONT_SIZE_PT * CAP_HEIGHT_RATIO
+    y_offset_pt = -cap_height_pt / 2.0
+    c.drawCentredString(0, y_offset_pt, text)
     c.restoreState()
 
 
