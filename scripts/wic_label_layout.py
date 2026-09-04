@@ -9,18 +9,33 @@ Layout summary (from the job's data file header):
     - Text is 2in tall bold Arial, compressed horizontally if needed.
     - Page is 52in wide with 1in margins on all four sides.
     - Each label is printed twice (2X).
-    - Labels are organized into "sheets" of 3 columns × 8 rows (24 labels).
-      Adjacent labels within a sheet share left/right and top/bottom edges.
+    - Labels are organized into "sheets" (by default a single sheet spans the
+      page width, filled with as many 8in columns as fit between the margins,
+      and 8 rows down). Adjacent labels within a sheet share left/right and
+      top/bottom edges.
     - Sheets are placed in row-major order: sheet 0 top-left, sheet 1
       top-right, sheet 2 below sheet 0, sheet 3 below sheet 1, and so on.
-      Only two sheets fit side-by-side per sheet-row on a 52in page; the
-      horizontal gap between them is derived from the page width.
+      How many sheets fit side-by-side is derived from the page width; the
+      horizontal gap between them absorbs the leftover width.
     - Sheet rows stack vertically, separated by VERTICAL_GAP_IN.
+    - A sheet size of 0 means "auto": 0 columns (the default) makes a single
+      sheet fill the page width with no horizontal gap; 0 rows makes a single
+      sheet of unbounded height with no vertical gap.
+    - --vertical-labels rotates each label's border and text 90 degrees
+      clockwise (text reads top-to-bottom). The label keeps its internal
+      design, so --label-width/--label-height and the sheet grid flags keep
+      describing the unrotated label; on the page the footprint swaps
+      width/height and the grid transposes (8x3 labels in a 3x8 grid become
+      3x8 footprints in an 8x3 grid).
+
+Every value above is only a default: each option constant in this module is
+also exposed as an optional command-line flag (see :func:`parse_args`).
 
 Usage::
 
     uv run python scripts/wic_label_layout.py -i "data/2027-7-2 WIC.txt"
     uv run python scripts/wic_label_layout.py -i input.txt -o out/labels.pdf
+    uv run python scripts/wic_label_layout.py -i input.txt --label-height 4 --copies 3
 """
 
 from __future__ import annotations
@@ -38,6 +53,9 @@ from reportlab.pdfgen.canvas import Canvas
 
 # --- Geometry (inches) --------------------------------------------------------
 
+# These constants are the script's defaults; each one can be overridden from
+# the command line (see :func:`parse_args`).
+
 PAGE_W_IN: float = 52.0
 PAGE_LEFT_MARGIN_IN: float = 1.0
 PAGE_RIGHT_MARGIN_IN: float = 1.0
@@ -49,22 +67,55 @@ LABEL_H_IN: float = 3.0
 LABEL_H_MARGIN_IN: float = 0.25  # left/right margin inside each label
 LABEL_V_MARGIN_IN: float = 0.5  # top/bottom margin inside each label
 
-# A sheet is a self-contained block of labels (3 cols × 8 rows), no internal gaps.
-LABELS_PER_SHEET_ROW: int = 3
-LABELS_PER_SHEET_COL: int = 8
-SHEET_W_IN: float = LABEL_W_IN * LABELS_PER_SHEET_ROW  # 24in
-SHEET_H_IN: float = LABEL_H_IN * LABELS_PER_SHEET_COL  # 24in
-LABELS_PER_SHEET: int = LABELS_PER_SHEET_ROW * LABELS_PER_SHEET_COL  # 24
+# When True, each label's border and text are rotated 90 degrees clockwise so
+# the text reads top-to-bottom (turn your head clockwise to read it). The label
+# keeps its internal design (text area, margins, cap height) and is rotated as
+# a unit, so LABEL_W_IN/LABEL_H_IN stay the *design* dimensions used for text
+# layout while FOOT_W_IN/FOOT_H_IN are the on-page footprint used for
+# positioning: with vertical labels the footprint swaps width/height and the
+# sheet grid transposes (columns <-> rows).
+VERTICAL_LABELS: bool = False
+FOOT_W_IN: float = LABEL_W_IN  # footprint width (== label height when vertical)
+FOOT_H_IN: float = LABEL_H_IN  # footprint height (== label width when vertical)
 
-# How many sheets fit side-by-side per sheet-row, and the gap between them.
-# For the default 52in page with 1in margins: 2 sheets × 24in = 48in, leaving 2in.
-SHEETS_PER_ROW: int = int(
-    (PAGE_W_IN - PAGE_LEFT_MARGIN_IN - PAGE_RIGHT_MARGIN_IN) // SHEET_W_IN
+# A sheet is a self-contained block of labels, no internal gaps. A size of 0
+# means "auto": 0 columns makes a single sheet that fills the usable page width
+# (no horizontal gap); 0 rows makes a single sheet of unbounded height (no
+# vertical gap). These defaults yield one sheet across the page, 8 rows down.
+LABELS_PER_SHEET_ROW: int = 0  # columns per sheet (0 = fill page width)
+LABELS_PER_SHEET_COL: int = 8  # rows per sheet (0 = single unbounded sheet)
+
+
+def _resolve_sheet_cols(
+    labels_per_sheet_row: int, usable_w_in: float, label_w_in: float
+) -> int:
+    """Return columns per sheet, expanding the auto value 0 to fill ``usable_w_in``."""
+    if labels_per_sheet_row == 0:
+        return int(usable_w_in // label_w_in)
+    return labels_per_sheet_row
+
+
+_USABLE_PAGE_W_IN: float = PAGE_W_IN - PAGE_LEFT_MARGIN_IN - PAGE_RIGHT_MARGIN_IN
+# SHEET_COLS is the resolved (non-auto) number of label columns per sheet;
+# LABELS_PER_SHEET_ROW keeps the raw value so 0 remains detectable.
+SHEET_COLS: int = _resolve_sheet_cols(
+    LABELS_PER_SHEET_ROW, _USABLE_PAGE_W_IN, LABEL_W_IN
+)
+SHEET_W_IN: float = LABEL_W_IN * SHEET_COLS
+SHEET_H_IN: float = LABEL_H_IN * LABELS_PER_SHEET_COL  # 0 when rows are auto
+LABELS_PER_SHEET: int = SHEET_COLS * LABELS_PER_SHEET_COL  # 0 when rows are auto
+
+# How many sheets fit side-by-side per sheet-row, and the gap between them. With
+# auto columns there is a single sheet across the page, so the gap is 0.
+SHEETS_PER_ROW: int = (
+    1 if LABELS_PER_SHEET_ROW == 0 else int(_USABLE_PAGE_W_IN // SHEET_W_IN)
 )
 HORIZONTAL_GAP_IN: float = (
-    PAGE_W_IN - PAGE_LEFT_MARGIN_IN - PAGE_RIGHT_MARGIN_IN - SHEETS_PER_ROW * SHEET_W_IN
+    0.0
+    if LABELS_PER_SHEET_ROW == 0
+    else _USABLE_PAGE_W_IN - SHEETS_PER_ROW * SHEET_W_IN
 )
-VERTICAL_GAP_IN: float = 2.0  # gap between sheet rows
+VERTICAL_GAP_IN: float = 2.0  # gap between sheet rows (unused when rows are auto)
 
 COPIES_PER_LABEL: int = 2
 
@@ -81,6 +132,180 @@ TEXT_HEIGHT_IN: float = 2.0  # cap height of the label text
 CAP_HEIGHT_RATIO: float = 0.728
 FONT_SIZE_PT: float = TEXT_HEIGHT_IN * 72.0 / CAP_HEIGHT_RATIO  # ~197.8pt
 
+# --- Configuration ------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class JobConfig:
+    """Every tunable option of a print job, as resolved from the command line.
+
+    Field defaults are the option constants above, so ``JobConfig()`` reproduces
+    the documented layout exactly. Derived quantities are exposed as properties
+    and written back into the module-level constants by
+    :func:`apply_layout_config`.
+    """
+
+    input_path: Path
+    output_path: Path | None = None
+    font_path: Path | None = None
+
+    page_w_in: float = PAGE_W_IN
+    page_left_margin_in: float = PAGE_LEFT_MARGIN_IN
+    page_right_margin_in: float = PAGE_RIGHT_MARGIN_IN
+    page_top_margin_in: float = PAGE_TOP_MARGIN_IN
+    page_bottom_margin_in: float = PAGE_BOTTOM_MARGIN_IN
+
+    label_w_in: float = LABEL_W_IN
+    label_h_in: float = LABEL_H_IN
+    label_h_margin_in: float = LABEL_H_MARGIN_IN
+    label_v_margin_in: float = LABEL_V_MARGIN_IN
+
+    labels_per_sheet_row: int = LABELS_PER_SHEET_ROW
+    labels_per_sheet_col: int = LABELS_PER_SHEET_COL
+    vertical_gap_in: float = VERTICAL_GAP_IN
+
+    copies_per_label: int = COPIES_PER_LABEL
+
+    draw_border: bool = DRAW_BORDER
+    border_line_width_pt: float = BORDER_LINE_WIDTH_PT
+
+    text_height_in: float = TEXT_HEIGHT_IN
+    cap_height_ratio: float = CAP_HEIGHT_RATIO
+
+    vertical_labels: bool = VERTICAL_LABELS
+
+    @property
+    def usable_page_w_in(self) -> float:
+        """Page width left after the left and right page margins."""
+        return self.page_w_in - self.page_left_margin_in - self.page_right_margin_in
+
+    # --- Effective (post-rotation) geometry -----------------------------------
+    # ``label_w_in``/``label_h_in`` and the two sheet counts are always the
+    # *design* values (they drive text layout, margins and ink area, which do
+    # not change under ``--vertical-labels``). The properties below give the
+    # on-page footprint and grid used for positioning: with vertical labels the
+    # footprint swaps width/height and the grid transposes (across <-> down).
+
+    @property
+    def foot_w_in(self) -> float:
+        """On-page footprint width (== label height when vertical)."""
+        return self.label_h_in if self.vertical_labels else self.label_w_in
+
+    @property
+    def foot_h_in(self) -> float:
+        """On-page footprint height (== label width when vertical)."""
+        return self.label_w_in if self.vertical_labels else self.label_h_in
+
+    @property
+    def eff_per_sheet_row(self) -> int:
+        """Labels across a sheet-row (raw, may be 0=auto); swapped when vertical."""
+        if self.vertical_labels:
+            return self.labels_per_sheet_col
+        return self.labels_per_sheet_row
+
+    @property
+    def eff_per_sheet_col(self) -> int:
+        """Labels down a sheet-column (raw, may be 0=auto); swapped when vertical."""
+        if self.vertical_labels:
+            return self.labels_per_sheet_row
+        return self.labels_per_sheet_col
+
+    @property
+    def sheet_cols(self) -> int:
+        """Resolved label columns per sheet (0 expands to fill the page width)."""
+        return _resolve_sheet_cols(
+            self.eff_per_sheet_row, self.usable_page_w_in, self.foot_w_in
+        )
+
+    @property
+    def sheet_w_in(self) -> float:
+        return self.foot_w_in * self.sheet_cols
+
+    @property
+    def sheet_h_in(self) -> float:
+        """Sheet height; 0 when rows are auto (one unbounded vertical sheet)."""
+        return self.foot_h_in * self.eff_per_sheet_col
+
+    @property
+    def labels_per_sheet(self) -> int:
+        """Labels per sheet; 0 when rows are auto (sheets have no fixed size)."""
+        return self.sheet_cols * self.eff_per_sheet_col
+
+    @property
+    def sheets_per_row(self) -> int:
+        """Sheets side-by-side per sheet-row; 1 when columns are auto."""
+        if self.eff_per_sheet_row == 0:
+            return 1
+        return int(self.usable_page_w_in // self.sheet_w_in)
+
+    @property
+    def horizontal_gap_in(self) -> float:
+        """Gap between adjacent sheets in a sheet-row; 0 when columns are auto."""
+        if self.eff_per_sheet_row == 0:
+            return 0.0
+        return self.usable_page_w_in - self.sheets_per_row * self.sheet_w_in
+
+    @property
+    def font_size_pt(self) -> float:
+        return self.text_height_in * 72.0 / self.cap_height_ratio
+
+
+def apply_layout_config(config: JobConfig) -> None:
+    """Copy ``config`` into the module-level constants the layout code reads.
+
+    The derived constants (sheet size, labels per sheet, sheets per row, the
+    horizontal gap and the font size) are recomputed from the raw values so that
+    every downstream function sees one consistent geometry.
+    """
+    global PAGE_W_IN, PAGE_LEFT_MARGIN_IN, PAGE_RIGHT_MARGIN_IN
+    global PAGE_TOP_MARGIN_IN, PAGE_BOTTOM_MARGIN_IN
+    global LABEL_W_IN, LABEL_H_IN, LABEL_H_MARGIN_IN, LABEL_V_MARGIN_IN
+    global VERTICAL_LABELS, FOOT_W_IN, FOOT_H_IN
+    global LABELS_PER_SHEET_ROW, LABELS_PER_SHEET_COL
+    global SHEET_COLS, SHEET_W_IN, SHEET_H_IN, LABELS_PER_SHEET
+    global SHEETS_PER_ROW, HORIZONTAL_GAP_IN, VERTICAL_GAP_IN
+    global COPIES_PER_LABEL, DRAW_BORDER, BORDER_LINE_WIDTH_PT
+    global TEXT_HEIGHT_IN, CAP_HEIGHT_RATIO, FONT_SIZE_PT
+
+    PAGE_W_IN = config.page_w_in
+    PAGE_LEFT_MARGIN_IN = config.page_left_margin_in
+    PAGE_RIGHT_MARGIN_IN = config.page_right_margin_in
+    PAGE_TOP_MARGIN_IN = config.page_top_margin_in
+    PAGE_BOTTOM_MARGIN_IN = config.page_bottom_margin_in
+
+    LABEL_W_IN = config.label_w_in
+    LABEL_H_IN = config.label_h_in
+    LABEL_H_MARGIN_IN = config.label_h_margin_in
+    LABEL_V_MARGIN_IN = config.label_v_margin_in
+
+    VERTICAL_LABELS = config.vertical_labels
+    FOOT_W_IN = config.foot_w_in
+    FOOT_H_IN = config.foot_h_in
+
+    # The layout helpers read the *effective* (post-rotation) grid, so the
+    # swapped values go into these constants; the raw CLI values live on in the
+    # JobConfig.
+    LABELS_PER_SHEET_ROW = config.eff_per_sheet_row
+    LABELS_PER_SHEET_COL = config.eff_per_sheet_col
+    VERTICAL_GAP_IN = config.vertical_gap_in
+
+    COPIES_PER_LABEL = config.copies_per_label
+
+    DRAW_BORDER = config.draw_border
+    BORDER_LINE_WIDTH_PT = config.border_line_width_pt
+
+    TEXT_HEIGHT_IN = config.text_height_in
+    CAP_HEIGHT_RATIO = config.cap_height_ratio
+
+    SHEET_COLS = config.sheet_cols
+    SHEET_W_IN = config.sheet_w_in
+    SHEET_H_IN = config.sheet_h_in
+    LABELS_PER_SHEET = config.labels_per_sheet
+    SHEETS_PER_ROW = config.sheets_per_row
+    HORIZONTAL_GAP_IN = config.horizontal_gap_in
+    FONT_SIZE_PT = config.font_size_pt
+
+
 # --- Font registration -------------------------------------------------------
 
 ARIAL_BOLD_NAME: str = "ArialBold"
@@ -94,14 +319,29 @@ ARIAL_BOLD_CANDIDATES: tuple[str, ...] = (
 )
 
 
-def _register_bold_font() -> tuple[str, str | None]:
+def _register_bold_font(preferred_path: Path | None = None) -> tuple[str, str | None]:
     """Register bold Arial from disk if available.
+
+    ``preferred_path`` (from ``--font``) is used exclusively when given;
+    otherwise the standard macOS locations are probed in order.
 
     Returns ``(reportlab_font_name, font_path)``. ``font_path`` is the absolute
     path to the TTF file (needed by ``fontTools`` to compute ink area via
     ``AreaPen``); it is ``None`` when the fallback font is used, in which case
     ink area is estimated from the natural width instead.
     """
+    if preferred_path is not None:
+        candidate = str(preferred_path)
+        if not Path(candidate).exists():
+            raise SystemExit(f"Font file not found: {preferred_path}")
+        try:
+            pdfmetrics.registerFont(RLTTFont(ARIAL_BOLD_NAME, candidate))
+        except Exception as exc:
+            raise SystemExit(
+                f"Could not register font {preferred_path}: {exc}"
+            ) from exc
+        return ARIAL_BOLD_NAME, candidate
+
     for candidate in ARIAL_BOLD_CANDIDATES:
         if Path(candidate).exists():
             try:
@@ -142,13 +382,41 @@ def sheet_origin_in(sheet_idx: int, page_h_in: float) -> tuple[float, float]:
 
 def page_height_in(num_instances: int) -> float:
     """Total page height (inches) including top and bottom page margins."""
-    n_sheets = -(-num_instances // LABELS_PER_SHEET)  # ceil(num_instances / 24)
+    if LABELS_PER_SHEET_COL == 0:
+        # Auto rows: a single vertical sheet; height grows with the label count.
+        n_label_rows = -(-num_instances // SHEET_COLS)
+        return PAGE_TOP_MARGIN_IN + n_label_rows * FOOT_H_IN + PAGE_BOTTOM_MARGIN_IN
+    n_sheets = -(-num_instances // LABELS_PER_SHEET)
     n_sheet_rows = -(-n_sheets // SHEETS_PER_ROW)
     return (
         PAGE_TOP_MARGIN_IN
         + n_sheet_rows * SHEET_H_IN
         + max(0, n_sheet_rows - 1) * VERTICAL_GAP_IN
         + PAGE_BOTTOM_MARGIN_IN
+    )
+
+
+def label_position_in(idx: int, page_h_in: float) -> tuple[float, float]:
+    """Return (x_in, y_bottom_in) of the bottom-left corner of label ``idx``.
+
+    Positions use the footprint (``FOOT_W_IN``/``FOOT_H_IN``) and the effective
+    grid, both of which are pre-swapped for vertical labels. With auto rows
+    (``LABELS_PER_SHEET_COL == 0``) all instances flow through a single
+    gap-free grid of ``SHEET_COLS`` columns; otherwise instances fill
+    fixed-size sheets placed in row-major order.
+    """
+    if LABELS_PER_SHEET_COL == 0:
+        row, col = divmod(idx, SHEET_COLS)
+        x_in = PAGE_LEFT_MARGIN_IN + col * FOOT_W_IN
+        y_in = page_h_in - PAGE_TOP_MARGIN_IN - (row + 1) * FOOT_H_IN
+        return x_in, y_in
+    sheet_idx, within = divmod(idx, LABELS_PER_SHEET)
+    row_in_sheet, col_in_sheet = divmod(within, SHEET_COLS)
+    sheet_x_in, sheet_y_top_in = sheet_origin_in(sheet_idx, page_h_in)
+    # Labels fill the sheet left-to-right, top-to-bottom.
+    return (
+        sheet_x_in + col_in_sheet * FOOT_W_IN,
+        sheet_y_top_in - (row_in_sheet + 1) * FOOT_H_IN,
     )
 
 
@@ -357,12 +625,21 @@ def write_metrics_report(
 
 
 def draw_label_border(c: Canvas, x_in: float, y_in: float) -> None:
-    """Draw a hairline border around a single label at the given bottom-left (in inches)."""
+    """Draw a hairline border around a single label at the given bottom-left (in inches).
+
+    The border is drawn at the label's on-page footprint, which equals the
+    design size rotated 90° clockwise for vertical labels.
+    """
     c.saveState()
     c.setLineWidth(BORDER_LINE_WIDTH_PT)
     c.setStrokeColor(black)
     c.rect(
-        x_in * 72.0, y_in * 72.0, LABEL_W_IN * 72.0, LABEL_H_IN * 72.0, stroke=1, fill=0
+        x_in * 72.0,
+        y_in * 72.0,
+        FOOT_W_IN * 72.0,
+        FOOT_H_IN * 72.0,
+        stroke=1,
+        fill=0,
     )
     c.restoreState()
 
@@ -377,16 +654,22 @@ def draw_label(
 ) -> None:
     """Draw a single label at the given bottom-left position (in inches).
 
-    Within the label, the text is centered horizontally in the 7in-wide text
-    area and its baseline sits flush with the inner edge of the bottom margin
-    so the 2in cap height fills the 2in text area from bottom margin to top
-    margin. ``scale`` is the precomputed horizontal compression factor (see
+    Within the label, the text is centered horizontally in the text area and
+    its baseline sits flush with the inner edge of the bottom margin so the cap
+    height fills the text area from bottom margin to top margin. ``scale`` is
+    the precomputed horizontal compression factor (see
     :func:`compute_horizontal_scale`) — passing it in keeps the PDF and the
     metrics report in lockstep.
+
+    ``x_in``/``y_in`` are the label's on-page footprint bottom-left. With
+    ``VERTICAL_LABELS`` the whole label is rotated 90° clockwise: the text is
+    laid out in the label's design coordinates and the canvas transform maps
+    design point (u, v) to footprint point (v, LABEL_W_IN - u), so the text
+    reads top-to-bottom and the reader turns their head clockwise to read it.
     """
     text_x0_in = x_in + LABEL_H_MARGIN_IN
     text_baseline_in = y_in + LABEL_V_MARGIN_IN
-    text_w_in = LABEL_W_IN - 2 * LABEL_H_MARGIN_IN  # 7in when LABEL_H_MARGIN_IN = 0.5
+    text_w_in = LABEL_W_IN - 2 * LABEL_H_MARGIN_IN
 
     natural_w_pt = c.stringWidth(text, font_name, FONT_SIZE_PT)
     natural_w_in = natural_w_pt / 72.0
@@ -394,8 +677,18 @@ def draw_label(
     text_x_in = text_x0_in + (text_w_in - drawn_w_in) / 2.0  # horizontal center
 
     c.saveState()
-    c.translate(text_x_in * 72.0, text_baseline_in * 72.0)
-    c.scale(scale, 1.0)
+    if VERTICAL_LABELS:
+        # Rotate 90° clockwise: design (u, v) -> footprint (v, LABEL_W_IN - u).
+        c.translate(x_in * 72.0, y_in * 72.0)
+        c.transform(0.0, -1.0, 1.0, 0.0, LABEL_W_IN * 72.0, 0.0)
+        c.translate(LABEL_H_MARGIN_IN * 72.0, LABEL_V_MARGIN_IN * 72.0)
+        c.scale(scale, 1.0)
+        # Center within the design text area (x is now the design u axis).
+        centering_pt = (text_w_in - drawn_w_in) / 2.0 * 72.0
+        c.translate(centering_pt, 0.0)
+    else:
+        c.translate(text_x_in * 72.0, text_baseline_in * 72.0)
+        c.scale(scale, 1.0)
     c.setFont(font_name, FONT_SIZE_PT)
     c.setFillColor(black)
     c.drawString(0, 0, text)
@@ -406,15 +699,17 @@ def build_pdf(
     labels: list[str],
     out_path: Path,
     per_label: list[LabelMetrics],
+    font_path: Path | None = None,
 ) -> int:
     """Lay out ``labels`` (each printed COPIES_PER_LABEL times) into sheets and write the PDF.
 
     ``per_label`` provides the precomputed horizontal scale for each unique
-    label so the PDF and the metrics report agree exactly.
+    label so the PDF and the metrics report agree exactly. ``font_path``
+    (``--font``) selects the TTF to draw with, when one was requested.
 
     Returns the number of label instances written.
     """
-    font_name, _font_path = _register_bold_font()
+    font_name, _registered_path = _register_bold_font(font_path)
     scale_by_text = {m.text: m.horizontal_scale for m in per_label}
     instances = [lbl for lbl in labels for _ in range(COPIES_PER_LABEL)]
     h_in = page_height_in(len(instances))
@@ -422,12 +717,7 @@ def build_pdf(
     c = Canvas(str(out_path), pagesize=(PAGE_W_IN * 72.0, h_in * 72.0))
 
     for idx, label in enumerate(instances):
-        sheet_idx, within = divmod(idx, LABELS_PER_SHEET)
-        row_in_sheet, col_in_sheet = divmod(within, LABELS_PER_SHEET_ROW)
-        sheet_x_in, sheet_y_top_in = sheet_origin_in(sheet_idx, h_in)
-        label_x_in = sheet_x_in + col_in_sheet * LABEL_W_IN
-        # Labels fill the sheet left-to-right, top-to-bottom.
-        label_y_in = sheet_y_top_in - (row_in_sheet + 1) * LABEL_H_IN
+        label_x_in, label_y_in = label_position_in(idx, h_in)
         if DRAW_BORDER:
             draw_label_border(c, label_x_in, label_y_in)
         draw_label(c, label, label_x_in, label_y_in, font_name, scale_by_text[label])
@@ -440,9 +730,77 @@ def build_pdf(
 # --- CLI ----------------------------------------------------------------------
 
 
-def main(argv: list[str] | None = None) -> None:
+def _validate_config(parser: argparse.ArgumentParser, config: JobConfig) -> None:
+    """Exit through ``parser`` unless ``config`` describes a printable layout."""
+    positive: dict[str, float] = {
+        "--page-width": config.page_w_in,
+        "--label-width": config.label_w_in,
+        "--label-height": config.label_h_in,
+        "--text-height": config.text_height_in,
+    }
+    for flag, value in positive.items():
+        if value <= 0:
+            parser.error(f"{flag} must be greater than 0 (got {value:g})")
+
+    non_negative: dict[str, float] = {
+        "--page-left-margin": config.page_left_margin_in,
+        "--page-right-margin": config.page_right_margin_in,
+        "--page-top-margin": config.page_top_margin_in,
+        "--page-bottom-margin": config.page_bottom_margin_in,
+        "--label-h-margin": config.label_h_margin_in,
+        "--label-v-margin": config.label_v_margin_in,
+        "--vertical-gap": config.vertical_gap_in,
+        "--border-line-width": config.border_line_width_pt,
+    }
+    for flag, value in non_negative.items():
+        if value < 0:
+            parser.error(f"{flag} must not be negative (got {value:g})")
+
+    if config.label_h_margin_in * 2 >= config.label_w_in:
+        parser.error(
+            "--label-h-margin is too large: 2 x "
+            f"{config.label_h_margin_in:g}in leaves no text area inside a "
+            f"{config.label_w_in:g}in wide label"
+        )
+
+    if config.labels_per_sheet_row < 0 or config.labels_per_sheet_col < 0:
+        parser.error(
+            "--labels-per-sheet-row and --labels-per-sheet-col must be >= 0 "
+            "(0 means auto: fill the page width / one unbounded sheet)"
+        )
+
+    if config.sheet_cols < 1:
+        parser.error(
+            f"no {config.foot_w_in:g}in label footprint fits in a "
+            f"{config.page_w_in:g}in page "
+            f"once its margins are removed; narrow the labels or widen the page"
+        )
+
+    if config.copies_per_label < 1:
+        parser.error(f"--copies must be >= 1 (got {config.copies_per_label})")
+
+    if not 0.0 < config.cap_height_ratio <= 1.0:
+        parser.error(
+            f"--cap-height-ratio must be in (0, 1] (got {config.cap_height_ratio:g})"
+        )
+
+    if config.sheets_per_row < 1:
+        parser.error(
+            f"no {config.sheet_w_in:g}in sheet fits in a {config.page_w_in:g}in page "
+            f"once its margins are removed; narrow the labels or widen the page"
+        )
+
+
+def parse_args(argv: list[str] | None = None) -> JobConfig:
+    """Construct the argument parser, parse ``argv``, return the resulting config.
+
+    Every option constant in this module is exposed as an optional flag whose
+    default is that constant's current value; ``-i/--input`` is the only
+    required argument.
+    """
     parser = argparse.ArgumentParser(
-        description="Lay out WIC labels on a 52in-wide print page and emit a PDF.",
+        description="Lay out WIC labels on a wide print page and emit a PDF.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "-i",
@@ -458,19 +816,175 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="Path to write the PDF (default: <input>.pdf next to the input).",
     )
+    parser.add_argument(
+        "--font",
+        type=Path,
+        default=None,
+        help="TTF to draw the labels with (default: probe the usual Arial Bold locations).",
+    )
+
+    page = parser.add_argument_group("page", "print page geometry (inches)")
+    page.add_argument("--page-width", type=float, default=PAGE_W_IN, help="Page width.")
+    page.add_argument(
+        "--page-left-margin",
+        type=float,
+        default=PAGE_LEFT_MARGIN_IN,
+        help="Left page margin.",
+    )
+    page.add_argument(
+        "--page-right-margin",
+        type=float,
+        default=PAGE_RIGHT_MARGIN_IN,
+        help="Right page margin.",
+    )
+    page.add_argument(
+        "--page-top-margin",
+        type=float,
+        default=PAGE_TOP_MARGIN_IN,
+        help="Top page margin.",
+    )
+    page.add_argument(
+        "--page-bottom-margin",
+        type=float,
+        default=PAGE_BOTTOM_MARGIN_IN,
+        help="Bottom page margin.",
+    )
+
+    label = parser.add_argument_group("label", "single label geometry (inches)")
+    label.add_argument(
+        "--label-width", type=float, default=LABEL_W_IN, help="Label width."
+    )
+    label.add_argument(
+        "--label-height", type=float, default=LABEL_H_IN, help="Label height."
+    )
+    label.add_argument(
+        "--label-h-margin",
+        type=float,
+        default=LABEL_H_MARGIN_IN,
+        help="Left/right margin inside each label.",
+    )
+    label.add_argument(
+        "--label-v-margin",
+        type=float,
+        default=LABEL_V_MARGIN_IN,
+        help="Top/bottom margin inside each label.",
+    )
+    label.add_argument(
+        "--vertical-labels",
+        action=argparse.BooleanOptionalAction,
+        default=VERTICAL_LABELS,
+        help="Rotate each label's border and text 90 degrees clockwise so the "
+        "text reads top-to-bottom. Swaps the label's on-page width/height and "
+        "transposes the sheet grid, so --label-width/--label-height and "
+        "--labels-per-sheet-row/--labels-per-sheet-col keep describing the "
+        "unrotated label.",
+    )
+
+    sheet = parser.add_argument_group(
+        "sheet", "labels-per-sheet grid and sheet spacing"
+    )
+    sheet.add_argument(
+        "--labels-per-sheet-row",
+        type=int,
+        default=LABELS_PER_SHEET_ROW,
+        help="Labels across a sheet (columns). 0 = one sheet filling the page "
+        "width with no horizontal gap (default).",
+    )
+    sheet.add_argument(
+        "--labels-per-sheet-col",
+        type=int,
+        default=LABELS_PER_SHEET_COL,
+        help="Labels down a sheet (rows). 0 = one sheet of unbounded height "
+        "with no vertical gap.",
+    )
+    sheet.add_argument(
+        "--vertical-gap",
+        type=float,
+        default=VERTICAL_GAP_IN,
+        help="Gap between sheet rows.",
+    )
+
+    output = parser.add_argument_group("output", "copies and border")
+    output.add_argument(
+        "-c",
+        "--copies",
+        type=int,
+        default=COPIES_PER_LABEL,
+        help="Copies printed of each label.",
+    )
+    output.add_argument(
+        "--border",
+        action=argparse.BooleanOptionalAction,
+        default=DRAW_BORDER,
+        help="Draw a hairline border around each label.",
+    )
+    output.add_argument(
+        "--border-line-width",
+        type=float,
+        default=BORDER_LINE_WIDTH_PT,
+        help="Border weight in points.",
+    )
+
+    text = parser.add_argument_group("text", "label text sizing")
+    text.add_argument(
+        "--text-height",
+        type=float,
+        default=TEXT_HEIGHT_IN,
+        help="Cap height of the label text.",
+    )
+    text.add_argument(
+        "--cap-height-ratio",
+        type=float,
+        default=CAP_HEIGHT_RATIO,
+        help="Cap height as a fraction of font size for the drawn font.",
+    )
+
     args = parser.parse_args(argv)
 
-    labels = parse_labels(args.input)
-    if not labels:
-        raise SystemExit(f"No labels found in {args.input}")
+    config = JobConfig(
+        input_path=Path(args.input),
+        output_path=None if args.output is None else Path(args.output),
+        font_path=None if args.font is None else Path(args.font),
+        page_w_in=float(args.page_width),
+        page_left_margin_in=float(args.page_left_margin),
+        page_right_margin_in=float(args.page_right_margin),
+        page_top_margin_in=float(args.page_top_margin),
+        page_bottom_margin_in=float(args.page_bottom_margin),
+        label_w_in=float(args.label_width),
+        label_h_in=float(args.label_height),
+        label_h_margin_in=float(args.label_h_margin),
+        label_v_margin_in=float(args.label_v_margin),
+        labels_per_sheet_row=int(args.labels_per_sheet_row),
+        labels_per_sheet_col=int(args.labels_per_sheet_col),
+        vertical_gap_in=float(args.vertical_gap),
+        copies_per_label=int(args.copies),
+        draw_border=bool(args.border),
+        border_line_width_pt=float(args.border_line_width),
+        text_height_in=float(args.text_height),
+        cap_height_ratio=float(args.cap_height_ratio),
+        vertical_labels=bool(args.vertical_labels),
+    )
+    _validate_config(parser, config)
+    return config
 
-    out_path = args.output or args.input.with_suffix(".pdf")
+
+def main(argv: list[str] | None = None) -> None:
+    config = parse_args(argv)
+    apply_layout_config(config)
+
+    labels = parse_labels(config.input_path)
+    if not labels:
+        raise SystemExit(f"No labels found in {config.input_path}")
+
+    out_path = config.output_path or config.input_path.with_suffix(".pdf")
     report_path = out_path.with_name(f"{out_path.stem}_report.txt")
 
-    font_name, font_path = _register_bold_font()
+    font_name, font_path = _register_bold_font(config.font_path)
     per_label, global_metrics = calculate_metrics(labels, font_name, font_path)
-    n = build_pdf(labels, out_path, per_label)
-    write_metrics_report(per_label, global_metrics, report_path, args.input, out_path)
+    n = build_pdf(labels, out_path, per_label, config.font_path)
+    write_metrics_report(
+        per_label, global_metrics, report_path, config.input_path, out_path
+    )
     print(
         f"Wrote {n} label instances "
         f"({len(labels)} unique x {COPIES_PER_LABEL}) to {out_path}\n"

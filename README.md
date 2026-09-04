@@ -36,14 +36,25 @@ usage.
 - Text is 2in tall bold Arial, compressed horizontally if needed.
 - Page is 52in wide with 1in margins on all four sides.
 - Each label is printed twice (`2X`).
-- Labels are organized into "sheets" of 3 columns × 8 rows (24 labels per
-  sheet). Adjacent labels within a sheet share left/right and top/bottom
-  edges.
+- Labels are organized into "sheets". By default a sheet spans the full page
+  width (as many 8in columns as fit between the margins, with no horizontal
+  gap) and is 8 rows down. Adjacent labels within a sheet share left/right and
+  top/bottom edges.
 - Sheets are placed in row-major order: sheet 0 top-left, sheet 1 top-right,
-  sheet 2 below sheet 0, sheet 3 below sheet 1, and so on. Only two sheets
-  fit side-by-side per sheet-row on a 52in page; the horizontal gap between
-  them is derived from the page width.
+  sheet 2 below sheet 0, sheet 3 below sheet 1, and so on. How many sheets fit
+  side-by-side is derived from the page width; the horizontal gap between them
+  absorbs the leftover width.
 - Sheet rows stack vertically, separated by `VERTICAL_GAP_IN`.
+- A sheet size of `0` means "auto": `--labels-per-sheet-row 0` (the default)
+  makes a single sheet filling the page width with no horizontal gap;
+  `--labels-per-sheet-col 0` makes a single sheet of unbounded height with no
+  vertical gap.
+- `--vertical-labels` rotates each label's border and text 90° clockwise so the
+  text reads top-to-bottom (turn your head clockwise to read it). The label
+  keeps its internal design, so `--label-width`/`--label-height` and the sheet
+  grid flags still describe the *unrotated* label; on the page the footprint
+  swaps width/height and the grid transposes (8×3in labels in a 3×8 grid become
+  3×8in footprints in an 8×3 grid).
 
 **Input format**
 
@@ -66,7 +77,24 @@ uv run python scripts/wic_label_layout.py -i "data/2027-7-2 WIC.txt"
 
 # Write to a custom location; a sibling *_report.txt is also produced
 uv run python scripts/wic_label_layout.py -i input.txt -o out/labels.pdf
+
+# Override any layout option; defaults are the values described above
+uv run python scripts/wic_label_layout.py -i input.txt \
+    --label-height 4 --copies 3 --page-width 60 --no-border
 ```
+
+**Options**
+
+`-i/--input` is the only required flag. Every layout constant in the script is
+also an optional flag defaulting to its defined value, e.g. `--page-width`,
+`--page-left-margin` / `--page-right-margin` / `--page-top-margin` /
+`--page-bottom-margin`, `--label-width`, `--label-height`,
+`--label-h-margin`, `--label-v-margin`, `--labels-per-sheet-row` (0 = auto: fill the page width, the default),
+`--labels-per-sheet-col` (0 = auto: one unbounded sheet), `--vertical-gap`,
+`-c/--copies`, `--vertical-labels` (rotate labels 90° clockwise),
+`--border` / `--no-border`, `--border-line-width`, `--text-height`,
+`--cap-height-ratio`, plus `--font` to draw with a specific TTF instead of
+probing for Arial Bold. Run with `-h` for full help.
 
 **Output**
 
