@@ -696,14 +696,17 @@ def draw_label(
 
     c.saveState()
     if VERTICAL_LABELS:
-        # Rotate 90° clockwise: design point (u, v) maps to footprint point (x_in + v, y_in + u).
-        # This requires the transform matrix [0 1; 1 0] with translation (x_in, y_in).
-        # Transform coefficients: (x,y) -> (0*x + 1*y + x_in, 1*x + 0*y + y_in) = (y + x_in, x + y_in)
-        c.transform(0.0, 1.0, 1.0, 0.0, x_in * 72.0, y_in * 72.0)
-        # Apply margins: after rotation, the horizontal margin applies vertically.
-        c.translate(LABEL_V_MARGIN_IN * 72.0, LABEL_H_MARGIN_IN * 72.0)
+        # Rotate 90° clockwise: design point (u, v) maps to footprint point (x_in + v, y_in + LABEL_W_IN - u).
+        # Transform matrix [0, -1; 1, 0] produces (u, v) → (v, -u); with offset (x_in, y_in + LABEL_W_IN)
+        # this gives page_x = v + x_in, page_y = -u + y_in + LABEL_W_IN.
+        # Transform coefficients: (x,y) → (0*x + 1*y + e, -1*x + 0*y + f) = (y + e, -x + f)
+        c.transform(0.0, -1.0, 1.0, 0.0, x_in * 72.0, (y_in + LABEL_W_IN) * 72.0)
+        # After rotation, axes are: new_x=v (design v-axis), new_y=-u (negative design u-axis).
+        # Apply margins: moving along v-axis (new_x) by LABEL_V_MARGIN_IN (top→left), and
+        # moving along -u-axis (new_y) by -LABEL_H_MARGIN_IN (left→down in rotated frame).
+        c.translate(LABEL_V_MARGIN_IN * 72.0, -LABEL_H_MARGIN_IN * 72.0)
         c.scale(scale, 1.0)
-        # Center within the design text area (x is now the design u axis).
+        # Center within the text area (which now spans along the new_x axis).
         centering_pt = (text_w_in - drawn_w_in) / 2.0 * 72.0
         c.translate(centering_pt, 0.0)
     else:
