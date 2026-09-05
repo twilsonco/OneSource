@@ -6,46 +6,7 @@ alongside a metrics text report (plus a machine-readable JSON sibling with the
 same data, for consolidating totals across jobs) covering material yield and
 ink usage.
 
-Layout summary (from the job's data file header):
-    - Each label is 8in × 3in with 1/2in margins on all sides; hairline border.
-    - Text is 2in tall bold Arial, compressed horizontally if needed.
-    - Page is 52in wide with 1in margins on all four sides.
-    - Each label is printed twice (2X).
-    - Labels are organized into "sheets" (by default a single sheet spans the
-      page width, filled with as many 8in columns as fit between the margins,
-      and 8 rows down). Adjacent labels within a sheet share left/right and
-      top/bottom edges.
-    - Sheets are placed in row-major order: sheet 0 top-left, sheet 1
-      top-right, sheet 2 below sheet 0, sheet 3 below sheet 1, and so on.
-      How many sheets fit side-by-side is derived from the page width; the
-      horizontal gap between them absorbs the leftover width.
-    - Sheet rows stack vertically, separated by VERTICAL_GAP_IN.
-    - A sheet size of 0 means "auto": 0 columns (the default) makes a single
-      sheet fill the page width with no horizontal gap; 0 rows makes a single
-      sheet of unbounded height with no vertical gap.
-    - --vertical-labels rotates each label's border and text 90 degrees
-      clockwise (text reads top-to-bottom). The label keeps its internal
-      design, so --label-width/--label-height keep describing the unrotated
-      label and the on-page footprint swaps width/height (8x3 labels become
-      3x8 footprints). When both sheet counts are fixed, the grid transposes
-      too (a 3x8 grid becomes 8x3); an auto (0) count instead stays on its own
-      page axis, so the labels still fill the page width / flow unbounded.
-
-Every value above is only a default: each option constant in this module is
-also exposed as an optional command-line flag (see :func:`parse_args`).
-
-``-i/--input`` accepts a glob pattern (quote it so the shell passes it
-through, e.g. ``-i "*6-chars.txt"`` or ``-i "data/WIC/*/*.txt"``). Every
-matching file is processed in sorted order, each producing its own PDF and
-metrics reports named after the matched file. ``-o/--output`` may only be
-combined with a pattern that matches a single file.
-
-Usage::
-
-    uv run python scripts/wic_label_layout.py -i "data/2027-7-2 WIC.txt"
-    uv run python scripts/wic_label_layout.py -i input.txt -o out/labels.pdf
-    uv run python scripts/wic_label_layout.py -i input.txt --label-height 4 --copies 3
-    uv run python scripts/wic_label_layout.py -i "data/WIC/*/*6-chars.txt"
+Run with `--help` to see available command-line options.
 """
 
 from __future__ import annotations
@@ -717,7 +678,7 @@ def write_metrics_report(
     rule = "=" * 80
     subrule = "-" * 80
     lines.append(rule)
-    lines.append("WIC LABEL PRINTING REPORT".center(80))
+    lines.append("LABEL PRINTING REPORT".center(80))
     lines.append(rule)
     lines.append(f"Generated:        {timestamp}")
     lines.append(f"Input File:       {input_path}")
@@ -957,7 +918,7 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
     required argument.
     """
     parser = argparse.ArgumentParser(
-        description="Lay out WIC labels on a wide print page and emit a PDF.",
+        description="Lay out labels on a wide print page and emit a PDF.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(

@@ -1,4 +1,4 @@
-"""Consolidate WIC label job metrics from every ``*_report.json`` in a directory.
+"""Consolidate label job metrics from every ``*_report.json`` in a directory.
 
 Reads all ``*_report.json`` files in the target directory (the machine-readable
 reports emitted by ``scripts/wic_label_layout.py``) and writes one consolidated
@@ -413,7 +413,7 @@ def write_consolidated_report(
     rule = "=" * 80
     subrule = "-" * 80
     lines.append(rule)
-    lines.append("WIC LABEL PRINTING REPORT - CONSOLIDATED".center(80))
+    lines.append("LABEL PRINTING REPORT - CONSOLIDATED".center(80))
     lines.append(rule)
     lines.append(f"Generated:         {timestamp}")
     lines.append(f"Source Directory:  {directory}")
@@ -534,7 +534,7 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help=(
             "Path for the consolidated text report "
-            "(default: <directory>/wic_jobs_combined.txt)."
+            "(default: <directory>/jobs_combined.txt)."
         ),
     )
     args = parser.parse_args(argv)
@@ -543,7 +543,7 @@ def main(argv: list[str] | None = None) -> None:
     if not directory.is_dir():
         raise SystemExit(f"Not a directory: {directory}")
 
-    out_path: Path = args.output or directory / "wic_jobs_combined.txt"
+    out_path: Path = args.output or directory / "jobs_combined.txt"
     skip = frozenset({out_path.resolve(), out_path.with_suffix(".json").resolve()})
 
     reports = load_reports(directory, skip)
