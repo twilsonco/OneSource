@@ -1,4 +1,4 @@
-"""Consolidate label job metrics from every ``*_report.json`` in a directory.
+"""Consolidate WIC label job metrics from every ``*_report.json`` in a directory.
 
 Reads all ``*_report.json`` files in the target directory (the machine-readable
 reports emitted by ``scripts/wic_label_layout.py``) and writes one consolidated
@@ -91,6 +91,15 @@ class ConsolidatedLabel:
     instances: int  # printed instances summed across those jobs
     char_count: int  # characters summed across those instances
     ink_area_sq_in: float  # ink area summed across those instances
+
+
+@dataclass(frozen=True)
+class SizeAreas:
+    """Area totals (sq inches) accumulated for one label size across jobs."""
+
+    substrate_sq_in: float = 0.0
+    label_material_sq_in: float = 0.0
+    ink_area_sq_in: float = 0.0
 
 
 # --- Loading -------------------------------------------------------------------
@@ -329,6 +338,33 @@ def consolidate_label_sizes(reports: list[JobReport]) -> Counter[LabelSize]:
     return total
 
 
+def consolidate_size_areas(reports: list[JobReport]) -> dict[LabelSize, SizeAreas]:
+    """Sum each job's area totals into the label size(s) it printed.
+
+    A job prints a single design size, so its full substrate/label/ink areas
+    land on that size; should a job ever mix sizes, its areas are split by
+    label-count share.
+    """
+    totals: dict[LabelSize, list[float]] = {}
+    for report in reports:
+        gm = report.global_metrics
+        total_labels = sum(report.label_sizes.values()) or 1
+        for size, count in report.label_sizes.items():
+            share = count / total_labels
+            bucket = totals.setdefault(size, [0.0, 0.0, 0.0])
+            bucket[0] += gm.total_substrate_sq_in * share
+            bucket[1] += gm.total_label_material_sq_in * share
+            bucket[2] += gm.total_ink_area_sq_in * share
+    return {
+        size: SizeAreas(
+            substrate_sq_in=substrate,
+            label_material_sq_in=material,
+            ink_area_sq_in=ink,
+        )
+        for size, (substrate, material, ink) in totals.items()
+    }
+
+
 def roll_widths_in(reports: list[JobReport]) -> list[float]:
     """Return the distinct roll widths (inches) used across ``reports``, sorted."""
     return sorted({report.page_width_in for report in reports})
@@ -354,6 +390,7 @@ def display_input_file(input_file: str, directory: Path) -> str:
 def write_consolidated_report_json(
     metrics: ConsolidatedMetrics,
     sizes: Counter[LabelSize],
+    size_areas: dict[LabelSize, SizeAreas],
     labels: list[ConsolidatedLabel],
     reports: list[JobReport],
     out_path: Path,
@@ -375,7 +412,27 @@ def write_consolidated_report_json(
             "report_files": [str(r.path) for r in reports],
         },
         "global": with_sq_ft(asdict(metrics)),
-        "label_sizes": label_sizes_to_json(sizes),
+        "label_sizes": [
+            {
+                "width_in": width_in,
+                "height_in": height_in,
+                "labels": count,
+                **with_sq_ft(
+                    {
+                        "substrate_sq_in": size_areas[
+                            (width_in, height_in)
+                        ].substrate_sq_in,
+                        "label_material_sq_in": size_areas[
+                            (width_in, height_in)
+                        ].label_material_sq_in,
+                        "ink_area_sq_in": size_areas[
+                            (width_in, height_in)
+                        ].ink_area_sq_in,
+                    }
+                ),
+            }
+            for (width_in, height_in), count in sorted(sizes.items())
+        ],
         "jobs": [
             {
                 "input_file": r.input_file,
@@ -395,6 +452,7 @@ def write_consolidated_report_json(
 def write_consolidated_report(
     metrics: ConsolidatedMetrics,
     sizes: Counter[LabelSize],
+    size_areas: dict[LabelSize, SizeAreas],
     labels: list[ConsolidatedLabel],
     reports: list[JobReport],
     out_path: Path,
@@ -413,7 +471,7 @@ def write_consolidated_report(
     rule = "=" * 80
     subrule = "-" * 80
     lines.append(rule)
-    lines.append("LABEL PRINTING REPORT - CONSOLIDATED".center(80))
+    lines.append("WIC LABEL PRINTING REPORT - CONSOLIDATED".center(80))
     lines.append(rule)
     lines.append(f"Generated:         {timestamp}")
     lines.append(f"Source Directory:  {directory}")
@@ -452,15 +510,29 @@ def write_consolidated_report(
     jobs_per_size: Counter[LabelSize] = Counter()
     for report in reports:
         jobs_per_size.update(report.label_sizes.keys())
-    lines.append(f"{'Label Size (WxH)':<16} | {'Jobs':>4} | {'Labels':>6}")
-    lines.append(f"{'-' * 16}-+-{'-' * 4}-+-{'-' * 6}")
-    for size, count in sorted(sizes.items()):
-        lines.append(
-            f"{format_label_size(size):<16} | {jobs_per_size[size]:>4d} | {count:>6d}"
-        )
-    lines.append(f"{'=' * 16}=+={'=' * 4}=+={'=' * 6}")
     lines.append(
-        f"{'Total':<16} | {metrics.total_jobs:>4d} | {metrics.total_output_labels:>6d}"
+        f"{'Label Size (WxH)':<16} | {'Jobs':>4} | {'Labels':>6} | "
+        f"{'Substrate (sq ft)':>17} | {'Label Area (sq ft)':>18} | {'Ink (sq ft)':>11}"
+    )
+    lines.append(
+        f"{'-' * 16}-+-{'-' * 4}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 18}-+-{'-' * 11}"
+    )
+    for size, count in sorted(sizes.items()):
+        area = size_areas[size]
+        lines.append(
+            f"{format_label_size(size):<16} | {jobs_per_size[size]:>4d} | {count:>6d} | "
+            f"{sq_ft(area.substrate_sq_in):>17.2f} | "
+            f"{sq_ft(area.label_material_sq_in):>18.2f} | "
+            f"{sq_ft(area.ink_area_sq_in):>11.2f}"
+        )
+    lines.append(
+        f"{'=' * 16}=+={'=' * 4}=+={'=' * 6}=+={'=' * 17}=+={'=' * 18}=+={'=' * 11}"
+    )
+    lines.append(
+        f"{'Total':<16} | {metrics.total_jobs:>4d} | {metrics.total_output_labels:>6d} | "
+        f"{sq_ft(metrics.total_substrate_sq_in):>17.2f} | "
+        f"{sq_ft(metrics.total_label_material_sq_in):>18.2f} | "
+        f"{sq_ft(metrics.total_ink_area_sq_in):>11.2f}"
     )
     lines.append("")
     lines.append(subrule)
@@ -506,7 +578,7 @@ def write_consolidated_report(
 
     json_path = out_path.with_suffix(".json")
     write_consolidated_report_json(
-        metrics, sizes, labels, reports, json_path, directory, timestamp
+        metrics, sizes, size_areas, labels, reports, json_path, directory, timestamp
     )
     return json_path
 
@@ -534,7 +606,7 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help=(
             "Path for the consolidated text report "
-            "(default: <directory>/jobs_combined.txt)."
+            "(default: <directory>/wic_jobs_combined.txt)."
         ),
     )
     args = parser.parse_args(argv)
@@ -543,15 +615,16 @@ def main(argv: list[str] | None = None) -> None:
     if not directory.is_dir():
         raise SystemExit(f"Not a directory: {directory}")
 
-    out_path: Path = args.output or directory / "jobs_combined.txt"
+    out_path: Path = args.output or directory / "wic_jobs_combined.txt"
     skip = frozenset({out_path.resolve(), out_path.with_suffix(".json").resolve()})
 
     reports = load_reports(directory, skip)
     metrics = consolidate(reports)
     sizes = consolidate_label_sizes(reports)
+    size_areas = consolidate_size_areas(reports)
     labels = consolidate_labels(reports)
     json_report_path = write_consolidated_report(
-        metrics, sizes, labels, reports, out_path, directory
+        metrics, sizes, size_areas, labels, reports, out_path, directory
     )
 
     print(
