@@ -12,6 +12,7 @@ Run with `--help` to see available command-line options.
 from __future__ import annotations
 
 import argparse
+import csv
 import glob
 import json
 from collections import Counter
@@ -149,6 +150,7 @@ class JobConfig:
     cap_height_ratio: float = CAP_HEIGHT_RATIO
 
     vertical_labels: bool = VERTICAL_LABELS
+    flat_label_price: float | None = None
 
     @property
     def usable_page_w_in(self) -> float:
@@ -296,6 +298,138 @@ def apply_layout_config(config: JobConfig) -> None:
     SHEETS_PER_ROW = config.sheets_per_row
     HORIZONTAL_GAP_IN = config.horizontal_gap_in
     FONT_SIZE_PT = config.font_size_pt
+
+
+# --- Pricing Configuration ---------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PricingConfig:
+    """Cost configuration for computing label production costs."""
+
+    ink_cost_usd_per_sqft: float
+    substrate_cost_usd_per_sqft: float
+    print_rate_hours_per_sqft: float
+    printer_run_cost_usd_per_hour: float
+    labor_rate_usd_per_hour: float
+    labor_time_factor: float
+    markup_percent: float
+
+
+def load_pricing_config(path: Path) -> PricingConfig | None:
+    """Load PricingConfig from a JSON file, returning None if file missing or invalid."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return PricingConfig(
+            ink_cost_usd_per_sqft=float(data["ink_cost_usd_per_sqft"]),
+            substrate_cost_usd_per_sqft=float(data["substrate_cost_usd_per_sqft"]),
+            print_rate_hours_per_sqft=float(data["print_rate_hours_per_sqft"]),
+            printer_run_cost_usd_per_hour=float(data["printer_run_cost_usd_per_hour"]),
+            labor_rate_usd_per_hour=float(data["labor_rate_usd_per_hour"]),
+            labor_time_factor=float(data["labor_time_factor"]),
+            markup_percent=float(data["markup_percent"]),
+        )
+    except (OSError, json.JSONDecodeError, KeyError, ValueError):
+        return None
+
+
+def resolve_pricing_config(
+    config_path: Path | None, cli_overrides: dict[str, float]
+) -> PricingConfig | None:
+    """Merge file config with CLI overrides, returning None if all absent."""
+    config = None
+    if config_path is not None:
+        config = load_pricing_config(config_path)
+
+    if config is None and not cli_overrides:
+        return None
+
+    # Start with defaults if no file config
+    if config is None:
+        config = PricingConfig(
+            ink_cost_usd_per_sqft=0.0,
+            substrate_cost_usd_per_sqft=0.0,
+            print_rate_hours_per_sqft=0.0,
+            printer_run_cost_usd_per_hour=0.0,
+            labor_rate_usd_per_hour=0.0,
+            labor_time_factor=1.0,
+            markup_percent=0.0,
+        )
+
+    # Apply CLI overrides
+    overrides = {}
+    if "ink_cost" in cli_overrides:
+        overrides["ink_cost_usd_per_sqft"] = cli_overrides["ink_cost"]
+    if "substrate_cost" in cli_overrides:
+        overrides["substrate_cost_usd_per_sqft"] = cli_overrides["substrate_cost"]
+    if "print_rate" in cli_overrides:
+        overrides["print_rate_hours_per_sqft"] = cli_overrides["print_rate"]
+    if "printer_cost" in cli_overrides:
+        overrides["printer_run_cost_usd_per_hour"] = cli_overrides["printer_cost"]
+    if "labor_rate" in cli_overrides:
+        overrides["labor_rate_usd_per_hour"] = cli_overrides["labor_rate"]
+    if "labor_factor" in cli_overrides:
+        overrides["labor_time_factor"] = cli_overrides["labor_factor"]
+    if "markup" in cli_overrides:
+        overrides["markup_percent"] = cli_overrides["markup"]
+
+    if overrides:
+        config = replace(config, **overrides)
+
+    return config
+
+
+@dataclass(frozen=True)
+class CostBreakdown:
+    """Per-unit cost breakdown for label production."""
+
+    ink_cost: float
+    substrate_cost: float
+    printer_hours: float
+    printer_cost: float
+    labor_hours: float
+    labor_cost: float
+    total_cost: float
+    unit_price: float  # Either markup-based or flat price
+
+
+def compute_cost_breakdown(
+    sqft_ink: float,
+    sqft_substrate: float,
+    pricing_config: PricingConfig | None,
+    flat_label_price: float | None,
+) -> CostBreakdown | None:
+    """Compute cost breakdown from areas and pricing config.
+
+    Returns None if pricing_config is None. If flat_label_price is provided,
+    unit_price uses it; otherwise unit_price is computed from markup.
+    """
+    if pricing_config is None:
+        return None
+
+    ink_cost = sqft_ink * pricing_config.ink_cost_usd_per_sqft
+    substrate_cost = sqft_substrate * pricing_config.substrate_cost_usd_per_sqft
+    printer_hours = sqft_substrate * pricing_config.print_rate_hours_per_sqft
+    printer_cost = printer_hours * pricing_config.printer_run_cost_usd_per_hour
+    labor_hours = printer_hours * pricing_config.labor_time_factor
+    labor_cost = labor_hours * pricing_config.labor_rate_usd_per_hour
+    total_cost = ink_cost + substrate_cost + printer_cost + labor_cost
+
+    if flat_label_price is not None:
+        unit_price = flat_label_price
+    else:
+        unit_price = total_cost * (1.0 + pricing_config.markup_percent / 100.0)
+
+    return CostBreakdown(
+        ink_cost=ink_cost,
+        substrate_cost=substrate_cost,
+        printer_hours=printer_hours,
+        printer_cost=printer_cost,
+        labor_hours=labor_hours,
+        labor_cost=labor_cost,
+        total_cost=total_cost,
+        unit_price=unit_price,
+    )
 
 
 # --- Font registration -------------------------------------------------------
@@ -500,6 +634,7 @@ class LabelMetrics:
     char_count: int
     horizontal_scale: float
     ink_area_sq_in: float  # already includes the horizontal scale factor
+    cost_breakdown: CostBreakdown | None = None
 
 
 @dataclass(frozen=True)
@@ -515,10 +650,15 @@ class GlobalMetrics:
     average_ink_coverage_pct: float
     page_height_in: float
     linear_feet: float  # substrate length along the roll, in linear feet
+    cost_breakdown: CostBreakdown | None = None
 
 
 def calculate_metrics(
-    labels: list[str], font_name: str, font_path: str | None
+    labels: list[str],
+    font_name: str,
+    font_path: str | None,
+    pricing_config: PricingConfig | None = None,
+    flat_label_price: float | None = None,
 ) -> tuple[list[LabelMetrics], GlobalMetrics]:
     """Compute per-label and global metrics for ``labels``.
 
@@ -529,21 +669,43 @@ def calculate_metrics(
     per_label: list[LabelMetrics] = []
     total_ink_area = 0.0
     total_characters = 0
+    total_ink_cost = 0.0
+    total_substrate_cost = 0.0
+    total_printer_hours = 0.0
+    total_printer_cost = 0.0
+    total_labor_hours = 0.0
+    total_labor_cost = 0.0
 
     for text in labels:
         scale = compute_horizontal_scale(text, font_name)
         unscaled_area = calculate_text_area(text, font_path, FONT_SIZE_PT)
         scaled_area = unscaled_area * scale
+
+        # Compute cost for single instance (before multiplying by COPIES_PER_LABEL)
+        label_sqft_ink = sq_ft(scaled_area)
+        label_sqft_substrate = sq_ft(LABEL_W_IN * LABEL_H_IN)
+        cost = compute_cost_breakdown(
+            label_sqft_ink, label_sqft_substrate, pricing_config, flat_label_price
+        )
+
         per_label.append(
             LabelMetrics(
                 text=text,
                 char_count=len(text),
                 horizontal_scale=scale,
                 ink_area_sq_in=scaled_area,
+                cost_breakdown=cost,
             )
         )
         total_ink_area += scaled_area * COPIES_PER_LABEL
         total_characters += len(text) * COPIES_PER_LABEL
+        if cost:
+            total_ink_cost += cost.ink_cost * COPIES_PER_LABEL
+            total_substrate_cost += cost.substrate_cost * COPIES_PER_LABEL
+            total_printer_hours += cost.printer_hours * COPIES_PER_LABEL
+            total_printer_cost += cost.printer_cost * COPIES_PER_LABEL
+            total_labor_hours += cost.labor_hours * COPIES_PER_LABEL
+            total_labor_cost += cost.labor_cost * COPIES_PER_LABEL
 
     total_output_labels = len(labels) * COPIES_PER_LABEL
     total_label_material = total_output_labels * (LABEL_W_IN * LABEL_H_IN)
@@ -551,6 +713,32 @@ def calculate_metrics(
     total_substrate = PAGE_W_IN * page_h_in
     material_yield = (total_label_material / total_substrate) * 100.0
     average_ink_coverage = (total_ink_area / total_label_material) * 100.0
+
+    # Compute global cost breakdown
+    global_cost = None
+    if pricing_config is not None:
+        global_cost_total = (
+            total_ink_cost
+            + total_substrate_cost
+            + total_printer_cost
+            + total_labor_cost
+        )
+        if flat_label_price is not None:
+            global_unit_price = flat_label_price * total_output_labels
+        else:
+            global_unit_price = global_cost_total * (
+                1.0 + pricing_config.markup_percent / 100.0
+            )
+        global_cost = CostBreakdown(
+            ink_cost=total_ink_cost,
+            substrate_cost=total_substrate_cost,
+            printer_hours=total_printer_hours,
+            printer_cost=total_printer_cost,
+            labor_hours=total_labor_hours,
+            labor_cost=total_labor_cost,
+            total_cost=global_cost_total,
+            unit_price=global_unit_price,
+        )
 
     global_metrics = GlobalMetrics(
         total_output_labels=total_output_labels,
@@ -562,6 +750,7 @@ def calculate_metrics(
         average_ink_coverage_pct=average_ink_coverage,
         page_height_in=page_h_in,
         linear_feet=total_substrate / PAGE_W_IN / 12.0,
+        cost_breakdown=global_cost,
     )
     return per_label, global_metrics
 
@@ -712,6 +901,25 @@ def write_metrics_report(
     )
     lines.append(f"Total Character Count:     {global_metrics.total_characters:>10d}")
     lines.append("")
+
+    # Cost breakdown section if available
+    if global_metrics.cost_breakdown is not None:
+        cb = global_metrics.cost_breakdown
+        lines.append(subrule)
+        lines.append("COST BREAKDOWN")
+        lines.append(subrule)
+        lines.append(f"Ink Cost:                  ${cb.ink_cost:>10.2f}")
+        lines.append(f"Substrate Cost:            ${cb.substrate_cost:>10.2f}")
+        lines.append(f"Printer Hours:             {cb.printer_hours:>10.2f} hrs")
+        lines.append(f"Printer Cost:              ${cb.printer_cost:>10.2f}")
+        lines.append(f"Labor Hours:               {cb.labor_hours:>10.2f} hrs")
+        lines.append(f"Labor Cost:                ${cb.labor_cost:>10.2f}")
+        lines.append(f"Total Cost:                ${cb.total_cost:>10.2f}")
+        lines.append(
+            f"Unit Price (per label):    ${cb.unit_price / global_metrics.total_output_labels:>10.2f}"
+        )
+        lines.append("")
+
     lines.append(subrule)
     lines.append("LABEL SIZE BREAKDOWN")
     lines.append(subrule)
@@ -723,15 +931,41 @@ def write_metrics_report(
     lines.append(subrule)
     lines.append("PER-TAG BREAKDOWN")
     lines.append(subrule)
-    lines.append(
-        f"{'Label Code':<16} | {'Chars':>5} | {'Scale':>8} | "
-        f"{'Ink Area (sq in)':>16} | {'Ink Area (sq ft)':>16}"
-    )
-    lines.append(f"{'-' * 16}-+-{'-' * 5}-+-{'-' * 8}-+-{'-' * 18}-+-{'-' * 18}")
-    for m in per_label:
+
+    # Build header and separator for per-tag table with optional cost columns
+    if per_label and per_label[0].cost_breakdown is not None:
         lines.append(
-            f"{m.text:<16} | {m.char_count:>5d} | {m.horizontal_scale:>8.3f} | {m.ink_area_sq_in:>16.4f} | {sq_ft(m.ink_area_sq_in):>16.4f}"
+            f"{'Label Code':<16} | {'Chars':>5} | {'Scale':>8} | "
+            f"{'Ink Area (sq in)':>16} | {'Ink Cost':>10} | "
+            f"{'Substrate Cost':>14} | {'Printer Cost':>12} | "
+            f"{'Labor Cost':>10} | {'Total Cost':>10}"
         )
+        lines.append(
+            f"{'-' * 16}-+-{'-' * 5}-+-{'-' * 8}-+-{'-' * 16}-+-{'-' * 10}-+-{'-' * 14}-+-{'-' * 12}-+-{'-' * 10}-+-{'-' * 10}"
+        )
+        for m in per_label:
+            cost_str = ""
+            if m.cost_breakdown:
+                cost_str = (
+                    f" | ${m.cost_breakdown.ink_cost:>9.2f} | "
+                    f"${m.cost_breakdown.substrate_cost:>12.2f} | "
+                    f"${m.cost_breakdown.printer_cost:>10.2f} | "
+                    f"${m.cost_breakdown.labor_cost:>8.2f} | "
+                    f"${m.cost_breakdown.total_cost:>8.2f}"
+                )
+            lines.append(
+                f"{m.text:<16} | {m.char_count:>5d} | {m.horizontal_scale:>8.3f} | {m.ink_area_sq_in:>16.4f}{cost_str}"
+            )
+    else:
+        lines.append(
+            f"{'Label Code':<16} | {'Chars':>5} | {'Scale':>8} | "
+            f"{'Ink Area (sq in)':>16} | {'Ink Area (sq ft)':>16}"
+        )
+        lines.append(f"{'-' * 16}-+-{'-' * 5}-+-{'-' * 8}-+-{'-' * 18}-+-{'-' * 18}")
+        for m in per_label:
+            lines.append(
+                f"{m.text:<16} | {m.char_count:>5d} | {m.horizontal_scale:>8.3f} | {m.ink_area_sq_in:>16.4f} | {sq_ft(m.ink_area_sq_in):>16.4f}"
+            )
     lines.append(rule)
     lines.append("")
 
@@ -741,7 +975,94 @@ def write_metrics_report(
     write_metrics_report_json(
         per_label, global_metrics, json_path, input_path, pdf_path, timestamp
     )
+
+    # Write CSV reports
+    write_metrics_report_csv(
+        per_label, out_path.with_name(f"{out_path.stem}_report.csv"), include_costs=True
+    )
+    write_metrics_report_csv(
+        per_label,
+        out_path.with_name(f"{out_path.stem}_report_customer.csv"),
+        include_costs=False,
+    )
+
     return json_path
+
+
+def write_metrics_report_csv(
+    per_label: list[LabelMetrics], output_path: Path, include_costs: bool = True
+) -> None:
+    """Write per-label metrics to a CSV file.
+
+    If include_costs is True, includes full cost breakdown (for internal use).
+    If False, includes only code, character count, and unit price (for customers).
+    """
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        if include_costs:
+            fieldnames = [
+                "Label Code",
+                "Char Count",
+                "Scale",
+                "Ink Area (sq in)",
+                "Ink Area (sq ft)",
+                "Ink Cost ($)",
+                "Substrate Cost ($)",
+                "Printer Hours",
+                "Printer Cost ($)",
+                "Labor Hours",
+                "Labor Cost ($)",
+                "Total Cost ($)",
+                "Unit Price ($)",
+            ]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for m in per_label:
+                row = {
+                    "Label Code": m.text,
+                    "Char Count": m.char_count,
+                    "Scale": f"{m.horizontal_scale:.3f}",
+                    "Ink Area (sq in)": f"{m.ink_area_sq_in:.4f}",
+                    "Ink Area (sq ft)": f"{sq_ft(m.ink_area_sq_in):.4f}",
+                }
+                if m.cost_breakdown:
+                    row.update(
+                        {
+                            "Ink Cost ($)": f"{m.cost_breakdown.ink_cost:.2f}",
+                            "Substrate Cost ($)": f"{m.cost_breakdown.substrate_cost:.2f}",
+                            "Printer Hours": f"{m.cost_breakdown.printer_hours:.2f}",
+                            "Printer Cost ($)": f"{m.cost_breakdown.printer_cost:.2f}",
+                            "Labor Hours": f"{m.cost_breakdown.labor_hours:.2f}",
+                            "Labor Cost ($)": f"{m.cost_breakdown.labor_cost:.2f}",
+                            "Total Cost ($)": f"{m.cost_breakdown.total_cost:.2f}",
+                            "Unit Price ($)": f"{m.cost_breakdown.unit_price:.2f}",
+                        }
+                    )
+                else:
+                    row.update(
+                        {
+                            "Ink Cost ($)": "",
+                            "Substrate Cost ($)": "",
+                            "Printer Hours": "",
+                            "Printer Cost ($)": "",
+                            "Labor Hours": "",
+                            "Labor Cost ($)": "",
+                            "Total Cost ($)": "",
+                            "Unit Price ($)": "",
+                        }
+                    )
+                writer.writerow(row)
+        else:
+            # Customer CSV: only code and unit price
+            fieldnames = ["Label Code", "Unit Price ($)"]
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for m in per_label:
+                row = {"Label Code": m.text}
+                if m.cost_breakdown:
+                    row["Unit Price ($)"] = f"{m.cost_breakdown.unit_price:.2f}"
+                else:
+                    row["Unit Price ($)"] = ""
+                writer.writerow(row)
 
 
 # --- Drawing ------------------------------------------------------------------
@@ -819,12 +1140,16 @@ def build_pdf(
     out_path: Path,
     per_label: list[LabelMetrics],
     font_path: Path | None = None,
+    pricing_config: PricingConfig | None = None,
+    flat_label_price: float | None = None,
 ) -> int:
     """Lay out ``labels`` (each printed COPIES_PER_LABEL times) into sheets and write the PDF.
 
     ``per_label`` provides the precomputed horizontal scale for each unique
     label so the PDF and the metrics report agree exactly. ``font_path``
     (``--font``) selects the TTF to draw with, when one was requested.
+    ``pricing_config`` and ``flat_label_price`` are accepted for API consistency
+    but not used by this function.
 
     Returns the number of label instances written.
     """
@@ -1061,6 +1386,62 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         help="Cap height as a fraction of font size for the drawn font.",
     )
 
+    pricing = parser.add_argument_group("pricing", "cost configuration and pricing")
+    pricing.add_argument(
+        "--pricing-config",
+        type=Path,
+        default=None,
+        help="Path to JSON pricing config file (default: pricing-config.json in project root).",
+    )
+    pricing.add_argument(
+        "--ink-cost",
+        type=float,
+        default=None,
+        help="Ink cost per square foot (USD) (overrides config file).",
+    )
+    pricing.add_argument(
+        "--substrate-cost",
+        type=float,
+        default=None,
+        help="Substrate cost per square foot (USD) (overrides config file).",
+    )
+    pricing.add_argument(
+        "--print-rate",
+        type=float,
+        default=None,
+        help="Print rate in hours per square foot (overrides config file).",
+    )
+    pricing.add_argument(
+        "--printer-cost",
+        type=float,
+        default=None,
+        help="Printer run cost per hour (USD) (overrides config file).",
+    )
+    pricing.add_argument(
+        "--labor-rate",
+        type=float,
+        default=None,
+        help="Labor rate per hour (USD) (overrides config file).",
+    )
+    pricing.add_argument(
+        "--labor-factor",
+        type=float,
+        default=None,
+        help="Labor time multiplier relative to printer hours (overrides config file).",
+    )
+    pricing.add_argument(
+        "--markup",
+        type=float,
+        default=None,
+        help="Markup percentage on total cost (overrides config file).",
+    )
+    pricing.add_argument(
+        "--flat-label-price",
+        type=float,
+        default=None,
+        help="Fixed price per label (USD) (overrides markup calculation).",
+    )
+
     args = parser.parse_args(argv)
 
     config = JobConfig(
@@ -1085,12 +1466,17 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         text_height_in=float(args.text_height),
         cap_height_ratio=float(args.cap_height_ratio),
         vertical_labels=bool(args.vertical_labels),
+        flat_label_price=args.flat_label_price,
     )
     _validate_config(parser, config)
     return config
 
 
-def process_job(config: JobConfig) -> None:
+def process_job(
+    config: JobConfig,
+    pricing_config: PricingConfig | None = None,
+    flat_label_price: float | None = None,
+) -> None:
     """Generate the PDF and metrics reports for a single resolved input file."""
     labels = parse_labels(config.input_path)
     if not labels:
@@ -1102,8 +1488,17 @@ def process_job(config: JobConfig) -> None:
     report_path = out_path.with_name(f"{out_path.stem}_report.txt")
 
     font_name, font_path = _register_bold_font(config.font_path)
-    per_label, global_metrics = calculate_metrics(labels, font_name, font_path)
-    n = build_pdf(labels, out_path, per_label, config.font_path)
+    per_label, global_metrics = calculate_metrics(
+        labels, font_name, font_path, pricing_config, flat_label_price
+    )
+    n = build_pdf(
+        labels,
+        out_path,
+        per_label,
+        config.font_path,
+        pricing_config,
+        flat_label_price,
+    )
     json_report_path = write_metrics_report(
         per_label, global_metrics, report_path, config.input_path, out_path
     )
@@ -1133,12 +1528,49 @@ def main(argv: list[str] | None = None) -> None:
     # Register the font once up front so a bad --font fails before any output.
     _register_bold_font(config.font_path)
 
+    # Load pricing config (look for --pricing-config, fall back to project root)
+    pricing_config_path = None
+    if hasattr(config, "pricing_config") and config.pricing_config:
+        pricing_config_path = config.pricing_config
+    else:
+        # Try to find pricing-config.json in the project root
+        default_pricing = Path(__file__).parent.parent / "pricing-config.json"
+        if default_pricing.exists():
+            pricing_config_path = default_pricing
+
+    # Build CLI overrides dict
+    cli_overrides = {}
+    if hasattr(config, "ink_cost") and config.ink_cost is not None:
+        cli_overrides["ink_cost"] = config.ink_cost
+    if hasattr(config, "substrate_cost") and config.substrate_cost is not None:
+        cli_overrides["substrate_cost"] = config.substrate_cost
+    if hasattr(config, "print_rate") and config.print_rate is not None:
+        cli_overrides["print_rate"] = config.print_rate
+    if hasattr(config, "printer_cost") and config.printer_cost is not None:
+        cli_overrides["printer_cost"] = config.printer_cost
+    if hasattr(config, "labor_rate") and config.labor_rate is not None:
+        cli_overrides["labor_rate"] = config.labor_rate
+    if hasattr(config, "labor_factor") and config.labor_factor is not None:
+        cli_overrides["labor_factor"] = config.labor_factor
+    if hasattr(config, "markup") and config.markup is not None:
+        cli_overrides["markup"] = config.markup
+
+    # Resolve pricing config
+    pricing_config = resolve_pricing_config(pricing_config_path, cli_overrides)
+
+    # Get flat label price from config
+    flat_label_price = config.flat_label_price
+
     for idx, input_path in enumerate(input_paths):
         if len(input_paths) > 1:
             print(f"\n[{idx + 1}/{len(input_paths)}] {input_path}")
         # ``-o`` is rejected above when more than one file matched, so it is
         # safe to carry through here for the single-file case.
-        process_job(replace(config, input_path=input_path))
+        process_job(
+            replace(config, input_path=input_path),
+            pricing_config,
+            flat_label_price,
+        )
 
 
 if __name__ == "__main__":
