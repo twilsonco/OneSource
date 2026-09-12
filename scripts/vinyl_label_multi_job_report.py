@@ -1142,6 +1142,7 @@ def write_job_breakdown_csv(
                 "Label Size (WxH)",
                 "Labels",
                 "Linear Feet",
+                "Label Area (sq ft)",
                 "Ink (sq in)",
                 "Ink (sq ft)",
                 "Ink Cost ($)",
@@ -1160,6 +1161,7 @@ def write_job_breakdown_csv(
             # Accumulators for TOTAL row
             total_labels = 0
             total_linear_feet = 0.0
+            total_label_area_sqft = 0.0
             total_ink_sq_in = 0.0
             total_ink_cost = 0.0
             total_substrate_cost = 0.0
@@ -1177,17 +1179,20 @@ def write_job_breakdown_csv(
                 label_size_str = ", ".join(
                     format_label_size(size) for size in sorted(report.label_sizes.keys())
                 ) if report.label_sizes else ""
+                label_area_sqft = sq_ft(gm.total_label_material_sq_in)
                 row = {
                     "Input File": input_file,
                     "Label Size (WxH)": label_size_str,
                     "Labels": gm.total_output_labels,
                     "Linear Feet": f"{gm.linear_feet:.2f}",
+                    "Label Area (sq ft)": f"{label_area_sqft:.2f}",
                     "Ink (sq in)": f"{gm.total_ink_area_sq_in:.2f}",
                     "Ink (sq ft)": f"{sq_ft(gm.total_ink_area_sq_in):.2f}",
                 }
                 # Accumulate numeric values
                 total_labels += gm.total_output_labels
                 total_linear_feet += gm.linear_feet
+                total_label_area_sqft += label_area_sqft
                 total_ink_sq_in += gm.total_ink_area_sq_in
                 
                 if gm.cost_breakdown:
@@ -1236,6 +1241,7 @@ def write_job_breakdown_csv(
                 "Label Size (WxH)": "",  # Non-summable
                 "Labels": total_labels,
                 "Linear Feet": f"{total_linear_feet:.2f}",
+                "Label Area (sq ft)": f"{total_label_area_sqft:.2f}",
                 "Ink (sq in)": f"{total_ink_sq_in:.2f}",
                 "Ink (sq ft)": f"{sq_ft(total_ink_sq_in):.2f}",
                 "Ink Cost ($)": f"{total_ink_cost:.2f}",
@@ -1251,22 +1257,26 @@ def write_job_breakdown_csv(
             writer.writerow(total_row)
         else:
             # Customer CSV: price and unit price per label
-            fieldnames = ["Input File", "Labels", "Price ($)", "Unit Price ($)"]
+            fieldnames = ["Input File", "Labels", "Label Area (sq ft)", "Price ($)", "Unit Price ($)"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             
             # Accumulators for TOTAL row
             total_labels = 0
+            total_label_area_sqft = 0.0
             total_price = 0.0
             
             for report in reports:
                 gm = report.global_metrics
                 input_file = display_input_file(report.input_file, directory)
+                label_area_sqft = sq_ft(gm.total_label_material_sq_in)
                 row = {
                     "Input File": input_file,
                     "Labels": gm.total_output_labels,
+                    "Label Area (sq ft)": f"{label_area_sqft:.2f}",
                 }
                 total_labels += gm.total_output_labels
+                total_label_area_sqft += label_area_sqft
                 if gm.cost_breakdown:
                     row["Price ($)"] = f"{gm.cost_breakdown.unit_price:.2f}"
                     row["Unit Price ($)"] = f"{gm.cost_breakdown.unit_price / gm.total_output_labels:.2f}" if gm.total_output_labels > 0 else ""
@@ -1280,6 +1290,7 @@ def write_job_breakdown_csv(
             total_row = {
                 "Input File": "TOTAL",
                 "Labels": total_labels,
+                "Label Area (sq ft)": f"{total_label_area_sqft:.2f}",
                 "Price ($)": f"{total_price:.2f}",
                 "Unit Price ($)": "",  # Non-summable
             }
