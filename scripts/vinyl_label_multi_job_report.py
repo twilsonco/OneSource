@@ -1071,7 +1071,7 @@ def write_job_breakdown_csv(
         if include_costs:
             fieldnames = [
                 "Input File",
-                "Roll Width",
+                "Label Size (WxH)",
                 "Labels",
                 "Linear Feet",
                 "Ink (sq in)",
@@ -1093,7 +1093,7 @@ def write_job_breakdown_csv(
                 input_file = display_input_file(report.input_file, directory)
                 row = {
                     "Input File": input_file,
-                    "Roll Width": report.page_width_in,
+                    "Label Size (WxH)": f"{report.page_width_in:g}",
                     "Labels": gm.total_output_labels,
                     "Linear Feet": f"{gm.linear_feet:.2f}",
                     "Ink (sq in)": f"{gm.total_ink_area_sq_in:.2f}",
@@ -1199,7 +1199,7 @@ def write_per_tag_breakdown_csv(
                 row = {
                     "Label Code": label.text,
                     "Copies": label.instances,
-                    "Label Size (WxH)": f"{label.label_size[0]:.2f}x{label.label_size[1]:.2f}",
+                    "Label Size (WxH)": f"{label.label_size[0]:g}x{label.label_size[1]:g}",
                     "Text Height (in)": "2.00",
                     "Char Count": label.char_count,
                     "Scale": f"{label.horizontal_scale:.4f}",
@@ -1283,7 +1283,7 @@ def write_per_tag_breakdown_csv(
                 # Populate optional fields based on configuration
                 if customer_report_config:
                     if customer_report_config.get("label_size_wxh", False):
-                        row["Label Size (WxH)"] = f"{label.label_size[0]:.2f}x{label.label_size[1]:.2f}"
+                        row["Label Size (WxH)"] = f"{label.label_size[0]:g}x{label.label_size[1]:g}"
                     if customer_report_config.get("text_height_in", False):
                         row["Text Height (in)"] = "2.00"
                     if customer_report_config.get("char_count", False):
