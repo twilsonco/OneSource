@@ -1091,9 +1091,13 @@ def write_job_breakdown_csv(
             for report in reports:
                 gm = report.global_metrics
                 input_file = display_input_file(report.input_file, directory)
+                # Format label sizes as "WxH" (e.g., "10x4, 12x4")
+                label_size_str = ", ".join(
+                    format_label_size(size) for size in sorted(report.label_sizes.keys())
+                ) if report.label_sizes else ""
                 row = {
                     "Input File": input_file,
-                    "Label Size (WxH)": f"{report.page_width_in:g}",
+                    "Label Size (WxH)": label_size_str,
                     "Labels": gm.total_output_labels,
                     "Linear Feet": f"{gm.linear_feet:.2f}",
                     "Ink (sq in)": f"{gm.total_ink_area_sq_in:.2f}",
