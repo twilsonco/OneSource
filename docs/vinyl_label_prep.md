@@ -1,18 +1,18 @@
-# WIC label layout & job reports
+# Vinyl label layout & job reports
 
-Two scripts form the WIC label printing pipeline:
+Two scripts form the vinyl label printing pipeline:
 
-- [`scripts/wic_label_layout.py`](../scripts/wic_label_layout.py) — lays out
+- [`scripts/vinyl_label_prep.py`](../scripts/vinyl_label_prep.py) — lays out
   label codes on a wide print page, emits a print-ready PDF plus per-job
   metrics reports.
-- [`scripts/wic_multi_job_report.py`](../scripts/wic_multi_job_report.py) —
+- [`scripts/vinyl_label_multi_job_report.py`](../scripts/vinyl_label_multi_job_report.py) —
   consolidates the metrics of many jobs into one combined report.
 
 ---
 
-## `wic_label_layout.py`
+## `vinyl_label_prep.py`
 
-Lays out WIC labels (8in × 3in) on a 52in-wide print page and emits a
+Lays out vinyl labels (8in × 3in) on a 52in-wide print page and emits a
 print-ready PDF, alongside a text report covering material yield and ink
 usage.
 
@@ -47,7 +47,7 @@ usage.
 ### Input format
 
 A plain text file with one label code per line. Lines starting with `#` are
-treated as comments. Example (`data/2027-7-2 WIC.txt`):
+treated as comments. Example:
 
 ```text
 # Labels: 8in X 3in with 1/2in margins all around; hairline border
@@ -61,16 +61,16 @@ TUT-4A
 
 ```sh
 # Use the default output path (<input>.pdf next to the input)
-uv run python scripts/wic_label_layout.py -i "data/2027-7-2 WIC.txt"
+uv run python scripts/vinyl_label_prep.py -i "data/input.txt"
 
 # Write to a custom location; sibling *_report.txt / *_report.json are also produced
-uv run python scripts/wic_label_layout.py -i input.txt -o out/labels.pdf
+uv run python scripts/vinyl_label_prep.py -i input.txt -o out/labels.pdf
 
 # Process every file matching a glob (quote it), e.g. one length bucket per file
-uv run python scripts/wic_label_layout.py -i "data/output/*6-chars.txt"
+uv run python scripts/vinyl_label_prep.py -i "data/output/*6-chars.txt"
 
 # Override any layout option; defaults are the values described above
-uv run python scripts/wic_label_layout.py -i input.txt \
+uv run python scripts/vinyl_label_prep.py -i input.txt \
     --label-height 4 --copies 3 --page-width 60 --no-border
 ```
 
@@ -103,7 +103,7 @@ For each run the script writes three files:
    - Total character count
    - Per-tag breakdown table (label code, chars, horizontal scale, ink area)
 3. **`*_report.json`** — the same data in machine-readable form, consumed by
-   `wic_multi_job_report.py` below.
+   `vinyl_label_multi_job_report.py` below.
 
 Ink area is computed via path integration (Green's theorem) over the TrueType
 glyph outlines using `fontTools.pens.areaPen.AreaPen`. If Arial Bold is not
@@ -112,10 +112,10 @@ and estimates ink area from the natural text bounding box.
 
 ---
 
-## `wic_multi_job_report.py`
+## `vinyl_label_multi_job_report.py`
 
 Consolidates the metrics of every `*_report.json` file in a directory (the
-machine-readable reports emitted by `wic_label_layout.py`) into one combined
+machine-readable reports emitted by `vinyl_label_prep.py`) into one combined
 report covering the total material yield and ink usage across all jobs, in the
 same style as the per-job reports.
 
@@ -126,14 +126,14 @@ own roll length, so jobs with different page widths consolidate correctly.
 ### Usage
 
 ```sh
-uv run python scripts/wic_multi_job_report.py <directory>
-uv run python scripts/wic_multi_job_report.py <directory> -o out/combined.txt
+uv run python scripts/vinyl_label_multi_job_report.py <directory>
+uv run python scripts/vinyl_label_multi_job_report.py <directory> -o out/combined.txt
 ```
 
 - `<directory>` — directory containing `*_report.json` files from
-  `wic_label_layout.py`.
+  `vinyl_label_prep.py`.
 - `-o/--output` — path for the consolidated text report (default:
-  `<directory>/wic_jobs_combined.txt`). A JSON sibling (same name, `.json`
+  `<directory>/vinyl_labels_combined.txt`). A JSON sibling (same name, `.json`
   suffix) is always written next to it.
 
 Consolidated reports carry a `report_type: "consolidated"` marker in their
@@ -163,12 +163,12 @@ own totals, so downstream tools can still attribute usage per job.
 
 ```sh
 # 1. See the length distribution, split into per-length files
-uv run python scripts/count_line_lengths.py "data/WIC/2026-09-03/full_tag_lists"
-uv run python scripts/split_lines_by_length.py "data/WIC/2026-09-03/full_tag_lists" 6,8,11,14,21
+uv run python scripts/count_line_lengths.py "data/input/full_tag_lists"
+uv run python scripts/split_lines_by_length.py "data/input/full_tag_lists" 6,8,11,14,21
 
 # 2. Generate a PDF + reports per length bucket
-uv run python scripts/wic_label_layout.py -i "data/WIC/2026-09-03/full_tag_lists/output/*.txt"
+uv run python scripts/vinyl_label_prep.py -i "data/input/full_tag_lists/output/*.txt"
 
 # 3. Consolidate all jobs' metrics into one report
-uv run python scripts/wic_multi_job_report.py "data/WIC/2026-09-03/full_tag_lists/output"
+uv run python scripts/vinyl_label_multi_job_report.py "data/input/full_tag_lists/output"
 ```

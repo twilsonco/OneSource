@@ -30,13 +30,13 @@ tooling (`ruff`, `mypy`, `types-reportlab`, `pypdf`).
 | --- | --- | --- |
 | `scripts/count_line_lengths.py` | Histogram of per-line character counts across the `.txt` files in a directory (per-file and combined tables). | [`docs/count_line_lengths.md`](docs/count_line_lengths.md) |
 | `scripts/split_lines_by_length.py` | Split the `.txt` files in a directory into per-length-range output files, optionally merging chosen ranges across all inputs. | [`docs/split_lines_by_length.md`](docs/split_lines_by_length.md) |
-| `scripts/wic_label_layout.py` | Lay out WIC labels (default 8in × 3in) on a 52in-wide page and emit a print-ready PDF plus per-job metrics reports (text + JSON). | [`docs/wic_label_layout.md`](docs/wic_label_layout.md) |
-| `scripts/wic_multi_job_report.py` | Consolidate the `*_report.json` metrics of many layout jobs into one combined material/ink report. | [`docs/wic_label_layout.md`](docs/wic_label_layout.md) |
+| `scripts/vinyl_label_prep.py` | Lay out vinyl labels (default 8in × 3in) on a 52in-wide page and emit a print-ready PDF plus per-job metrics reports (text + JSON). | [`docs/vinyl_label_prep.md`](docs/vinyl_label_prep.md) |
+| `scripts/vinyl_label_multi_job_report.py` | Consolidate the `*_report.json` metrics of many layout jobs into one combined material/ink report. | [`docs/vinyl_label_prep.md`](docs/vinyl_label_prep.md) |
 
-A typical WIC job flows: count line lengths → split tag lists by length →
-generate a PDF per bucket with `wic_label_layout.py` → consolidate metrics
-with `wic_multi_job_report.py`. See
-[`docs/wic_label_layout.md`](docs/wic_label_layout.md) for the full pipeline
+A typical vinyl label job flows: count line lengths → split tag lists by length →
+generate a PDF per bucket with `vinyl_label_prep.py` → consolidate metrics
+with `vinyl_label_multi_job_report.py`. See
+[`docs/vinyl_label_prep.md`](docs/vinyl_label_prep.md) for the full pipeline
 example.
 
 ## Project layout

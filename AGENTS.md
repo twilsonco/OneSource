@@ -43,13 +43,13 @@ uv add --dev ruff mypy
 
 ## Conventions for Scripts
 
-- **One-off scripts** belong in `scripts/`. Give each a descriptive filename (e.g. `wic_8x3_layout.py`, not `script1.py`).
-- **Inputs** live in `data/` (e.g. `2027-7-2 WIC.txt`). Read them with `pathlib.Path`, never hard-code absolute paths.
+- **One-off scripts** belong in `scripts/`. Give each a descriptive filename (e.g. `vinyl_label_prep.py`, not `script1.py`).
+- **Inputs** live in `data/` (e.g. `2027-7-2 labels.txt`). Read them with `pathlib.Path`, never hard-code absolute paths.
 - **Output** (PDF, PS, etc.) should be written to a predictable location — usually a sibling of the input, or a dedicated `out/` folder created on demand.
 - Keep scripts **standalone and re-runnable**: parse CLI args with `argparse` or `sys.argv`, and accept input/output paths as flags rather than baking them in.
 - Prefer **stdlib** (`csv`, `pathlib`, `argparse`, `dataclasses`) for one-offs. Add a real dependency only when it pays for itself (e.g. `reportlab`, `pillow`, `pypdf`).
 - Prefer **`fpdf2`** or **`reportlab`** for PDF generation when a layout is non-trivial. For raw PostScript, generate text and pipe to `enscript`/`a2ps` or write PS directly when needed.
-- Label layout work (e.g. the `2027-7-2 WIC.txt` job) should be expressed in **inches or points with named constants**, not magic numbers:
+- Label layout work (e.g. the `2027-7-2 labels.txt` job) should be expressed in **inches or points with named constants**, not magic numbers:
   ```python
   LABEL_W_IN = 8.0
   LABEL_H_IN = 3.0
@@ -75,11 +75,11 @@ uv add --dev ruff mypy
 This is a scripts-first repo — there is no `tests/` directory by design. For non-trivial scripts, add a small `if __name__ == "__main__"` block or a `def main()` that can be exercised manually, and keep the logic in pure functions so it's easy to spot-check from a REPL:
 
 ```sh
-uv run python -c "from scripts.wic_layout import build_page; print(build_page(...))"
+uv run python -c "from scripts.vinyl_label_prep import build_page; print(build_page(...))"
 ```
 
 ## Git
 
 - Keep changes scoped. One script per commit when possible.
-- Commit messages: short imperative summary, e.g. `scripts: add 8x3 WIC label layout`.
+- Commit messages: short imperative summary, e.g. `scripts: add vinyl label layout prep`.
 - Do not commit `.venv/`, `__pycache__/`, or generated PDFs/PS files.

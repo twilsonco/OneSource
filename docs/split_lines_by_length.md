@@ -6,7 +6,7 @@ line's character count.
 This pairs with [`count_line_lengths.py`](count_line_lengths.md): once you know
 how line lengths are distributed, this script groups them into separate files
 so each length bucket can be printed with its own layout settings (e.g. one
-font size per bucket in `wic_label_layout.py`).
+font size per bucket in `vinyl_label_prep.py`).
 
 ## Usage
 
@@ -71,5 +71,5 @@ Exits with status `1` and a message on stderr when:
 # Group tag lists into length buckets, merging the two longest buckets
 # across all input files:
 uv run python scripts/split_lines_by_length.py \
-    "data/WIC/2026-09-03/full_tag_lists" 6,8,11,14,21 --combined 14,21
+    "data/input/full_tag_lists" 6,8,11,14,21 --combined 14,21
 ```

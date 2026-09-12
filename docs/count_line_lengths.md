@@ -50,5 +50,5 @@ Nothing is written to disk.
 ## Example
 
 ```sh
-uv run python scripts/count_line_lengths.py "data/WIC/2026-09-03/full_tag_lists"
+uv run python scripts/count_line_lengths.py "data/input/full_tag_lists"
 ```

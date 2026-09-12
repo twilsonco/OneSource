@@ -1,4 +1,4 @@
-"""Lay out WIC labels (8in × 3in) on a 52in-wide print page and emit a PDF.
+"""Lay out vinyl labels (8in × 3in) on a 52in-wide print page and emit a PDF.
 
 Reads a list of label codes from a text file (one per line; ``#`` introduces a
 comment) and produces a continuous PDF suitable for printing and cutting,

@@ -1,7 +1,7 @@
-"""Consolidate WIC label job metrics from every ``*_report.json`` in a directory.
+"""Consolidate vinyl label job metrics from every ``*_report.json`` in a directory.
 
 Reads all ``*_report.json`` files in the target directory (the machine-readable
-reports emitted by ``scripts/wic_label_layout.py``) and writes one consolidated
+reports emitted by ``scripts/vinyl_label_prep.py``) and writes one consolidated
 text report covering the combined material yield and ink usage across all jobs,
 in the same style as the per-job reports. A machine-readable JSON sibling with
 the same data is written next to it, along with a per-job and a per-label
@@ -13,8 +13,8 @@ own roll length, so jobs with different page widths consolidate correctly.
 
 Usage::
 
-    uv run python scripts/wic_multi_job_report.py <directory>
-    uv run python scripts/wic_multi_job_report.py <directory> -o out/combined.txt
+    uv run python scripts/vinyl_label_multi_job_report.py <directory>
+    uv run python scripts/vinyl_label_multi_job_report.py <directory> -o out/combined.txt
 """
 
 from __future__ import annotations
@@ -29,13 +29,13 @@ from datetime import datetime
 from pathlib import Path
 
 # Make the sibling module importable whether this script is run directly
-# (``python scripts/wic_multi_job_report.py``) or as a module
-# (``python -m scripts.wic_multi_job_report``).
+# (``python scripts/vinyl_label_multi_job_report.py``) or as a module
+# (``python -m scripts.vinyl_label_multi_job_report``).
 _SCRIPTS_DIR = str(Path(__file__).resolve().parent)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
-from wic_label_layout import (  # noqa: E402
+from vinyl_label_prep import (  # noqa: E402
     CostBreakdown,
     GlobalMetrics,
     LabelMetrics,
@@ -692,7 +692,7 @@ def display_input_file(input_file: str, directory: Path) -> str:
     """Return ``input_file`` relative to ``directory`` when it lies inside it.
 
     The per-job reports store the input path as it was passed to
-    ``wic_label_layout.py``; for the job-breakdown table the source directory
+    ``vinyl_label_prep.py``; for the job-breakdown table the source directory
     prefix is noise, so it is stripped. Paths outside ``directory`` (or that
     otherwise cannot be made relative) are returned unchanged.
     """
@@ -789,7 +789,7 @@ def write_consolidated_report(
     rule = "=" * 80
     subrule = "-" * 80
     lines.append(rule)
-    lines.append("WIC LABEL PRINTING REPORT - CONSOLIDATED".center(80))
+    lines.append("VINYL LABEL PRINTING REPORT - CONSOLIDATED".center(80))
     lines.append(rule)
     lines.append(f"Generated:         {timestamp}")
     lines.append(f"Source Directory:  {directory}")
@@ -1372,7 +1372,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "directory",
         type=Path,
-        help="Directory containing *_report.json files from wic_label_layout.py.",
+        help="Directory containing *_report.json files from vinyl_label_prep.py.",
     )
     parser.add_argument(
         "-o",
@@ -1381,7 +1381,7 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help=(
             "Path for the consolidated text report "
-            "(default: <directory>/wic_jobs_combined.txt)."
+            "(default: <directory>/vinyl_labels_combined.txt)."
         ),
     )
 
@@ -1441,7 +1441,7 @@ def main(argv: list[str] | None = None) -> None:
     if not directory.is_dir():
         raise SystemExit(f"Not a directory: {directory}")
 
-    out_path: Path = args.output or directory / "wic_jobs_combined.txt"
+    out_path: Path = args.output or directory / "vinyl_labels_combined.txt"
     skip = frozenset({out_path.resolve(), out_path.with_suffix(".json").resolve()})
 
     # Load pricing config
