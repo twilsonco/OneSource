@@ -7,7 +7,8 @@
   "labor_time_factor": 0.1,
   "markup_percent": 20.0,
   "customer_report": {
-    "roll_width": false,
+    "label_size_wxh": false,
+    "text_height_in": false,
     "char_count": true,
     "scale": false,
     "label_size_sq_in": true,
@@ -22,6 +23,7 @@
     "labor_hours": false,
     "labor_cost": false,
     "total_cost": false,
+    "price": true,
     "unit_price": true
   }
 }

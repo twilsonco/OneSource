@@ -1169,7 +1169,8 @@ def write_per_tag_breakdown_csv(
     all_columns = [
         "Label Code",
         "Copies",
-        "Roll Width",
+        "Label Size (WxH)",
+        "Text Height (in)",
         "Char Count",
         "Scale",
         "Label Size (sq in)",
@@ -1198,7 +1199,8 @@ def write_per_tag_breakdown_csv(
                 row = {
                     "Label Code": label.text,
                     "Copies": label.instances,
-                    "Roll Width": f"{label.label_size[0]:.1f}",
+                    "Label Size (WxH)": f"{label.label_size[0]:.2f}x{label.label_size[1]:.2f}",
+                    "Text Height (in)": "2.00",
                     "Char Count": label.char_count,
                     "Scale": f"{label.horizontal_scale:.4f}",
                     "Label Size (sq in)": f"{label.label_size[0] * label.label_size[1]:.2f}",
@@ -1244,7 +1246,8 @@ def write_per_tag_breakdown_csv(
 
             # Map config keys to column names and extract configuration
             config_map = {
-                "roll_width": "Roll Width",
+                "label_size_wxh": "Label Size (WxH)",
+                "text_height_in": "Text Height (in)",
                 "char_count": "Char Count",
                 "scale": "Scale",
                 "label_size_sq_in": "Label Size (sq in)",
@@ -1279,8 +1282,10 @@ def write_per_tag_breakdown_csv(
 
                 # Populate optional fields based on configuration
                 if customer_report_config:
-                    if customer_report_config.get("roll_width", False):
-                        row["Roll Width"] = f"{label.label_size[0]:.1f}"
+                    if customer_report_config.get("label_size_wxh", False):
+                        row["Label Size (WxH)"] = f"{label.label_size[0]:.2f}x{label.label_size[1]:.2f}"
+                    if customer_report_config.get("text_height_in", False):
+                        row["Text Height (in)"] = "2.00"
                     if customer_report_config.get("char_count", False):
                         row["Char Count"] = label.char_count
                     if customer_report_config.get("scale", False):
