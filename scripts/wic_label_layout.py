@@ -314,6 +314,7 @@ class PricingConfig:
     labor_rate_usd_per_hour: float
     labor_time_factor: float
     markup_percent: float
+    customer_report: dict[str, bool] | None = None
 
 
 def load_pricing_config(path: Path) -> PricingConfig | None:
@@ -328,6 +329,7 @@ def load_pricing_config(path: Path) -> PricingConfig | None:
             labor_rate_usd_per_hour=float(data["labor_rate_usd_per_hour"]),
             labor_time_factor=float(data["labor_time_factor"]),
             markup_percent=float(data["markup_percent"]),
+            customer_report=data.get("customer_report"),
         )
     except (OSError, json.JSONDecodeError, KeyError, ValueError):
         return None
@@ -374,7 +376,7 @@ def resolve_pricing_config(
         overrides["markup_percent"] = cli_overrides["markup"]
 
     if overrides:
-        config = replace(config, **overrides)
+        config = replace(config, **overrides, customer_report=config.customer_report)
 
     return config
 

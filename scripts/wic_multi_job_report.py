@@ -100,6 +100,22 @@ class ConsolidatedLabel:
 
 
 @dataclass(frozen=True)
+class ConsolidatedLabelBySize:
+    """A single label code at a specific size, summed across jobs.
+
+    Used for per-tag-by-size breakdown reporting where each unique (text, size)
+    combination is tracked separately with its own aggregated metrics.
+    """
+
+    text: str
+    label_size: LabelSize
+    instances: int  # printed instances at this size
+    char_count: int  # total characters at this size
+    ink_area_sq_in: float  # ink area at this size
+    cost_breakdown: CostBreakdown | None = None
+
+
+@dataclass(frozen=True)
 class SizeAreas:
     """Area totals (sq inches) accumulated for one label size across jobs."""
 
@@ -482,6 +498,91 @@ def consolidate_labels(
             )
         )
     return labels_list
+
+
+def consolidate_labels_by_size(
+    reports: list[JobReport], pricing_config: PricingConfig | None = None
+) -> list[ConsolidatedLabelBySize]:
+    """Consolidate label metrics grouped by label text and size.
+
+    Each unique (label_text, label_size) combination is tracked separately,
+    allowing per-tag-by-size reporting. Since all labels in a job share the
+    same size, we can determine the size for each label from its report.
+    """
+    # Track metrics by (text, size) tuple
+    label_by_size_key: dict[tuple[str, LabelSize], list[tuple[int, float, CostBreakdown | None]]] = {}
+
+    for report in reports:
+        # All labels in this report share the same size
+        label_size = list(report.label_sizes.keys())[0] if report.label_sizes else None
+        if label_size is None:
+            continue
+
+        for label in report.per_label:
+            key = (label.text, label_size)
+            if key not in label_by_size_key:
+                label_by_size_key[key] = []
+            # Store (copies_per_label, ink_area_per_instance, cost_breakdown)
+            label_by_size_key[key].append(
+                (report.copies_per_label, label.ink_area_sq_in, label.cost_breakdown)
+            )
+
+    # Build result list
+    result: list[ConsolidatedLabelBySize] = []
+    for (text, size), entries in sorted(label_by_size_key.items()):
+        total_instances = sum(entry[0] for entry in entries)
+        total_char_count = len(text) * total_instances
+        total_ink_area = sum(entry[0] * entry[1] for entry in entries)
+
+        # Aggregate cost breakdown
+        cost_breakdown = None
+        total_ink_cost = 0.0
+        total_substrate_cost = 0.0
+        total_printer_hours = 0.0
+        total_printer_cost = 0.0
+        total_labor_hours = 0.0
+        total_labor_cost = 0.0
+        total_cost = 0.0
+
+        for copies, _, cb in entries:
+            if cb:
+                total_ink_cost += cb.ink_cost * copies
+                total_substrate_cost += cb.substrate_cost * copies
+                total_printer_hours += cb.printer_hours * copies
+                total_printer_cost += cb.printer_cost * copies
+                total_labor_hours += cb.labor_hours * copies
+                total_labor_cost += cb.labor_cost * copies
+                total_cost += cb.total_cost * copies
+
+        if total_cost > 0:
+            unit_price = (
+                total_cost * (1.0 + pricing_config.markup_percent / 100.0)
+                if pricing_config
+                else total_cost
+            )
+            cost_breakdown = CostBreakdown(
+                ink_cost=total_ink_cost,
+                substrate_cost=total_substrate_cost,
+                printer_hours=total_printer_hours,
+                printer_cost=total_printer_cost,
+                labor_hours=total_labor_hours,
+                labor_cost=total_labor_cost,
+                total_cost=total_cost,
+                unit_price=unit_price,
+            )
+
+        result.append(
+            ConsolidatedLabelBySize(
+                text=text,
+                label_size=size,
+                instances=total_instances,
+                char_count=total_char_count,
+                ink_area_sq_in=total_ink_area,
+                cost_breakdown=cost_breakdown,
+            )
+        )
+
+    return result
 
 
 def consolidate_label_sizes(reports: list[JobReport]) -> Counter[LabelSize]:
@@ -878,6 +979,7 @@ def write_size_breakdown_csv(
                 "Labor Hours",
                 "Labor Cost ($)",
                 "Total Cost ($)",
+                "Price ($)",
                 "Unit Price ($)",
             ]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -902,7 +1004,8 @@ def write_size_breakdown_csv(
                             "Labor Hours": f"{cb.labor_hours:.2f}",
                             "Labor Cost ($)": f"{cb.labor_cost:.2f}",
                             "Total Cost ($)": f"{cb.total_cost:.2f}",
-                            "Unit Price ($)": f"{cb.unit_price:.2f}",
+                            "Price ($)": f"{cb.unit_price:.2f}",
+                            "Unit Price ($)": f"{cb.unit_price / count:.2f}" if count > 0 else "",
                         }
                     )
                 else:
@@ -915,13 +1018,14 @@ def write_size_breakdown_csv(
                             "Labor Hours": "",
                             "Labor Cost ($)": "",
                             "Total Cost ($)": "",
+                            "Price ($)": "",
                             "Unit Price ($)": "",
                         }
                     )
                 writer.writerow(row)
         else:
-            # Customer CSV: only size and unit price
-            fieldnames = ["Label Size (WxH)", "Labels", "Unit Price ($)"]
+            # Customer CSV: price and unit price per label
+            fieldnames = ["Label Size (WxH)", "Labels", "Price ($)", "Unit Price ($)"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for size, count in sorted(sizes.items()):
@@ -931,8 +1035,10 @@ def write_size_breakdown_csv(
                     "Labels": count,
                 }
                 if area.cost_breakdown:
-                    row["Unit Price ($)"] = f"{area.cost_breakdown.unit_price:.2f}"
+                    row["Price ($)"] = f"{area.cost_breakdown.unit_price:.2f}"
+                    row["Unit Price ($)"] = f"{area.cost_breakdown.unit_price / count:.2f}" if count > 0 else ""
                 else:
+                    row["Price ($)"] = ""
                     row["Unit Price ($)"] = ""
                 writer.writerow(row)
 
@@ -960,6 +1066,7 @@ def write_job_breakdown_csv(
                 "Labor Hours",
                 "Labor Cost ($)",
                 "Total Cost ($)",
+                "Price ($)",
                 "Unit Price ($)",
             ]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -986,7 +1093,8 @@ def write_job_breakdown_csv(
                             "Labor Hours": f"{cb.labor_hours:.2f}",
                             "Labor Cost ($)": f"{cb.labor_cost:.2f}",
                             "Total Cost ($)": f"{cb.total_cost:.2f}",
-                            "Unit Price ($)": f"{cb.unit_price:.2f}",
+                            "Price ($)": f"{cb.unit_price:.2f}",
+                            "Unit Price ($)": f"{cb.unit_price / gm.total_output_labels:.2f}" if gm.total_output_labels > 0 else "",
                         }
                     )
                 else:
@@ -999,13 +1107,14 @@ def write_job_breakdown_csv(
                             "Labor Hours": "",
                             "Labor Cost ($)": "",
                             "Total Cost ($)": "",
+                            "Price ($)": "",
                             "Unit Price ($)": "",
                         }
                     )
                 writer.writerow(row)
         else:
-            # Customer CSV: only filename and unit price
-            fieldnames = ["Input File", "Labels", "Unit Price ($)"]
+            # Customer CSV: price and unit price per label
+            fieldnames = ["Input File", "Labels", "Price ($)", "Unit Price ($)"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for report in reports:
@@ -1016,9 +1125,212 @@ def write_job_breakdown_csv(
                     "Labels": gm.total_output_labels,
                 }
                 if gm.cost_breakdown:
-                    row["Unit Price ($)"] = f"{gm.cost_breakdown.unit_price:.2f}"
+                    row["Price ($)"] = f"{gm.cost_breakdown.unit_price:.2f}"
+                    row["Unit Price ($)"] = f"{gm.cost_breakdown.unit_price / gm.total_output_labels:.2f}" if gm.total_output_labels > 0 else ""
                 else:
+                    row["Price ($)"] = ""
                     row["Unit Price ($)"] = ""
+                writer.writerow(row)
+
+
+def write_per_tag_breakdown_csv(
+    labels: list[ConsolidatedLabelBySize],
+    output_path: Path,
+    include_costs: bool = True,
+    customer_report_config: dict[str, bool] | None = None,
+) -> None:
+    """Write per-tag breakdown to a CSV file.
+
+    If include_costs is False, only customer-facing columns are written,
+    controlled by customer_report_config. If include_costs is True, all
+    internal columns are written regardless of configuration.
+    """
+    if not labels:
+        return
+
+    # Define all available columns
+    all_columns = [
+        "Label Code",
+        "Roll Width",
+        "Char Count",
+        "Scale",
+        "Label Size (sq in)",
+        "Label Area (sq ft)",
+        "Linear Feet",
+        "Ink (sq in)",
+        "Ink (sq ft)",
+        "Ink Cost ($)",
+        "Substrate Cost ($)",
+        "Printer Hours",
+        "Printer Cost ($)",
+        "Labor Hours",
+        "Labor Cost ($)",
+        "Total Cost ($)",
+        "Price ($)",
+        "Unit Price ($)",
+    ]
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        if include_costs:
+            # Internal CSV: all columns
+            fieldnames = all_columns
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for label in labels:
+                row = {
+                    "Label Code": label.text,
+                    "Roll Width": f"{label.label_size[0]:.1f}",
+                    "Char Count": label.char_count,
+                    "Scale": "1.0",  # Not tracked per label, placeholder
+                    "Label Size (sq in)": f"{label.label_size[0] * label.label_size[1]:.2f}",
+                    "Label Area (sq ft)": f"{sq_ft(label.label_size[0] * label.label_size[1]):.4f}",
+                    "Linear Feet": "",  # Not tracked per label in consolidation
+                    "Ink (sq in)": f"{label.ink_area_sq_in:.2f}",
+                    "Ink (sq ft)": f"{sq_ft(label.ink_area_sq_in):.4f}",
+                }
+                if label.cost_breakdown:
+                    cb = label.cost_breakdown
+                    row.update(
+                        {
+                            "Ink Cost ($)": f"{cb.ink_cost:.2f}",
+                            "Substrate Cost ($)": f"{cb.substrate_cost:.2f}",
+                            "Printer Hours": f"{cb.printer_hours:.4f}",
+                            "Printer Cost ($)": f"{cb.printer_cost:.2f}",
+                            "Labor Hours": f"{cb.labor_hours:.4f}",
+                            "Labor Cost ($)": f"{cb.labor_cost:.2f}",
+                            "Total Cost ($)": f"{cb.total_cost:.2f}",
+                            "Price ($)": f"{cb.unit_price:.2f}",
+                            "Unit Price ($)": f"{cb.unit_price / label.instances:.2f}" if label.instances > 0 else "",
+                        }
+                    )
+                else:
+                    row.update(
+                        {
+                            "Ink Cost ($)": "",
+                            "Substrate Cost ($)": "",
+                            "Printer Hours": "",
+                            "Printer Cost ($)": "",
+                            "Labor Hours": "",
+                            "Labor Cost ($)": "",
+                            "Total Cost ($)": "",
+                            "Price ($)": "",
+                            "Unit Price ($)": "",
+                        }
+                    )
+                writer.writerow(row)
+        else:
+            # Customer CSV: use configuration to determine which columns to include
+            # Always include label code and instances
+            fieldnames = ["Label Code", "Instances"]
+
+            # Map config keys to column names and extract configuration
+            config_map = {
+                "roll_width": "Roll Width",
+                "char_count": "Char Count",
+                "scale": "Scale",
+                "label_size_sq_in": "Label Size (sq in)",
+                "label_area_sq_ft": "Label Area (sq ft)",
+                "linear_feet": "Linear Feet",
+                "ink_sq_in": "Ink (sq in)",
+                "ink_sq_ft": "Ink (sq ft)",
+                "ink_cost": "Ink Cost ($)",
+                "substrate_cost": "Substrate Cost ($)",
+                "printer_hours": "Printer Hours",
+                "printer_cost": "Printer Cost ($)",
+                "labor_hours": "Labor Hours",
+                "labor_cost": "Labor Cost ($)",
+                "total_cost": "Total Cost ($)",
+                "price": "Price ($)",
+                "unit_price": "Unit Price ($)",
+            }
+
+            # Build fieldnames based on customer_report_config
+            if customer_report_config:
+                for config_key, col_name in config_map.items():
+                    if customer_report_config.get(config_key, False):
+                        fieldnames.append(col_name)
+
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for label in labels:
+                row = {
+                    "Label Code": label.text,
+                    "Instances": label.instances,
+                }
+
+                # Populate optional fields based on configuration
+                if customer_report_config:
+                    if customer_report_config.get("roll_width", False):
+                        row["Roll Width"] = f"{label.label_size[0]:.1f}"
+                    if customer_report_config.get("char_count", False):
+                        row["Char Count"] = label.char_count
+                    if customer_report_config.get("scale", False):
+                        row["Scale"] = "1.0"
+                    if customer_report_config.get("label_size_sq_in", False):
+                        row["Label Size (sq in)"] = f"{label.label_size[0] * label.label_size[1]:.2f}"
+                    if customer_report_config.get("label_area_sq_ft", False):
+                        row["Label Area (sq ft)"] = f"{sq_ft(label.label_size[0] * label.label_size[1]):.4f}"
+                    if customer_report_config.get("linear_feet", False):
+                        row["Linear Feet"] = ""
+                    if customer_report_config.get("ink_sq_in", False):
+                        row["Ink (sq in)"] = f"{label.ink_area_sq_in:.2f}"
+                    if customer_report_config.get("ink_sq_ft", False):
+                        row["Ink (sq ft)"] = f"{sq_ft(label.ink_area_sq_in):.4f}"
+                    if customer_report_config.get("ink_cost", False):
+                        row["Ink Cost ($)"] = (
+                            f"{label.cost_breakdown.ink_cost:.2f}"
+                            if label.cost_breakdown
+                            else ""
+                        )
+                    if customer_report_config.get("substrate_cost", False):
+                        row["Substrate Cost ($)"] = (
+                            f"{label.cost_breakdown.substrate_cost:.2f}"
+                            if label.cost_breakdown
+                            else ""
+                        )
+                    if customer_report_config.get("printer_hours", False):
+                        row["Printer Hours"] = (
+                            f"{label.cost_breakdown.printer_hours:.4f}"
+                            if label.cost_breakdown
+                            else ""
+                        )
+                    if customer_report_config.get("printer_cost", False):
+                        row["Printer Cost ($)"] = (
+                            f"{label.cost_breakdown.printer_cost:.2f}"
+                            if label.cost_breakdown
+                            else ""
+                        )
+                    if customer_report_config.get("labor_hours", False):
+                        row["Labor Hours"] = (
+                            f"{label.cost_breakdown.labor_hours:.4f}"
+                            if label.cost_breakdown
+                            else ""
+                        )
+                    if customer_report_config.get("labor_cost", False):
+                        row["Labor Cost ($)"] = (
+                            f"{label.cost_breakdown.labor_cost:.2f}"
+                            if label.cost_breakdown
+                            else ""
+                        )
+                    if customer_report_config.get("total_cost", False):
+                        row["Total Cost ($)"] = (
+                            f"{label.cost_breakdown.total_cost:.2f}"
+                            if label.cost_breakdown
+                            else ""
+                        )
+                    if customer_report_config.get("price", False):
+                        row["Price ($)"] = (
+                            f"{label.cost_breakdown.unit_price:.2f}"
+                            if label.cost_breakdown
+                            else ""
+                        )
+                    if customer_report_config.get("unit_price", False):
+                        row["Unit Price ($)"] = (
+                            f"{label.cost_breakdown.unit_price / label.instances:.2f}"
+                            if label.cost_breakdown and label.instances > 0
+                            else ""
+                        )
+
                 writer.writerow(row)
 
 
@@ -1143,6 +1455,7 @@ def main(argv: list[str] | None = None) -> None:
     sizes = consolidate_label_sizes(reports)
     size_areas = consolidate_size_areas(reports, pricing_config)
     labels = consolidate_labels(reports, pricing_config)
+    labels_by_size = consolidate_labels_by_size(reports, pricing_config)
     json_report_path = write_consolidated_report(
         metrics, sizes, size_areas, labels, reports, out_path, directory
     )
@@ -1171,6 +1484,17 @@ def main(argv: list[str] | None = None) -> None:
         directory,
         out_path.with_name(f"{out_path.stem}_job_breakdown_customer.csv"),
         include_costs=False,
+    )
+    write_per_tag_breakdown_csv(
+        labels_by_size,
+        out_path.with_name(f"{out_path.stem}_tag_breakdown.csv"),
+        include_costs=True,
+    )
+    write_per_tag_breakdown_csv(
+        labels_by_size,
+        out_path.with_name(f"{out_path.stem}_tag_breakdown_customer.csv"),
+        include_costs=False,
+        customer_report_config=pricing_config.customer_report if pricing_config else None,
     )
 
     print(
