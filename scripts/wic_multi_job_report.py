@@ -112,6 +112,8 @@ class ConsolidatedLabelBySize:
     instances: int  # printed instances at this size
     char_count: int  # total characters at this size
     ink_area_sq_in: float  # ink area at this size
+    horizontal_scale: float  # average scale factor across instances
+    linear_feet: float  # linear feet of substrate used (height * copies / 12)
     cost_breakdown: CostBreakdown | None = None
 
 
@@ -510,7 +512,8 @@ def consolidate_labels_by_size(
     same size, we can determine the size for each label from its report.
     """
     # Track metrics by (text, size) tuple
-    label_by_size_key: dict[tuple[str, LabelSize], list[tuple[int, float, CostBreakdown | None]]] = {}
+    # Store: (copies_per_label, ink_area_per_instance, scale, cost_breakdown)
+    label_by_size_key: dict[str, list[tuple[int, float, float, CostBreakdown | None]]] = {}
 
     for report in reports:
         # All labels in this report share the same size
@@ -519,20 +522,32 @@ def consolidate_labels_by_size(
             continue
 
         for label in report.per_label:
-            key = (label.text, label_size)
-            if key not in label_by_size_key:
-                label_by_size_key[key] = []
-            # Store (copies_per_label, ink_area_per_instance, cost_breakdown)
-            label_by_size_key[key].append(
-                (report.copies_per_label, label.ink_area_sq_in, label.cost_breakdown)
+            key_str = f"{label.text}::{label_size[0]}x{label_size[1]}"
+            if key_str not in label_by_size_key:
+                label_by_size_key[key_str] = []
+            label_by_size_key[key_str].append(
+                (report.copies_per_label, label.ink_area_sq_in, label.horizontal_scale, label.cost_breakdown)
             )
 
     # Build result list
     result: list[ConsolidatedLabelBySize] = []
-    for (text, size), entries in sorted(label_by_size_key.items()):
+    for key_str in sorted(label_by_size_key.keys()):
+        # Parse the key to extract text and size
+        text, size_str = key_str.split("::")
+        width_str, height_str = size_str.split("x")
+        label_size = (float(width_str), float(height_str))
+        
+        entries = label_by_size_key[key_str]
         total_instances = sum(entry[0] for entry in entries)
         total_char_count = len(text) * total_instances
         total_ink_area = sum(entry[0] * entry[1] for entry in entries)
+        
+        # Compute average scale (weighted by copies)
+        total_scale_weighted = sum(entry[0] * entry[2] for entry in entries)
+        avg_scale = total_scale_weighted / total_instances if total_instances > 0 else 1.0
+        
+        # Calculate linear feet from label height
+        linear_feet = label_size[1] * total_instances / 12.0
 
         # Aggregate cost breakdown
         cost_breakdown = None
@@ -544,7 +559,7 @@ def consolidate_labels_by_size(
         total_labor_cost = 0.0
         total_cost = 0.0
 
-        for copies, _, cb in entries:
+        for copies, _, _, cb in entries:
             if cb:
                 total_ink_cost += cb.ink_cost * copies
                 total_substrate_cost += cb.substrate_cost * copies
@@ -574,10 +589,12 @@ def consolidate_labels_by_size(
         result.append(
             ConsolidatedLabelBySize(
                 text=text,
-                label_size=size,
+                label_size=label_size,
                 instances=total_instances,
                 char_count=total_char_count,
                 ink_area_sq_in=total_ink_area,
+                horizontal_scale=avg_scale,
+                linear_feet=linear_feet,
                 cost_breakdown=cost_breakdown,
             )
         )
@@ -1151,6 +1168,7 @@ def write_per_tag_breakdown_csv(
     # Define all available columns
     all_columns = [
         "Label Code",
+        "Copies",
         "Roll Width",
         "Char Count",
         "Scale",
@@ -1179,12 +1197,13 @@ def write_per_tag_breakdown_csv(
             for label in labels:
                 row = {
                     "Label Code": label.text,
+                    "Copies": label.instances,
                     "Roll Width": f"{label.label_size[0]:.1f}",
                     "Char Count": label.char_count,
-                    "Scale": "1.0",  # Not tracked per label, placeholder
+                    "Scale": f"{label.horizontal_scale:.4f}",
                     "Label Size (sq in)": f"{label.label_size[0] * label.label_size[1]:.2f}",
                     "Label Area (sq ft)": f"{sq_ft(label.label_size[0] * label.label_size[1]):.4f}",
-                    "Linear Feet": "",  # Not tracked per label in consolidation
+                    "Linear Feet": f"{label.linear_feet:.2f}",
                     "Ink (sq in)": f"{label.ink_area_sq_in:.2f}",
                     "Ink (sq ft)": f"{sq_ft(label.ink_area_sq_in):.4f}",
                 }
@@ -1220,8 +1239,8 @@ def write_per_tag_breakdown_csv(
                 writer.writerow(row)
         else:
             # Customer CSV: use configuration to determine which columns to include
-            # Always include label code and instances
-            fieldnames = ["Label Code", "Instances"]
+            # Always include label code and copies
+            fieldnames = ["Label Code", "Copies"]
 
             # Map config keys to column names and extract configuration
             config_map = {
@@ -1255,7 +1274,7 @@ def write_per_tag_breakdown_csv(
             for label in labels:
                 row = {
                     "Label Code": label.text,
-                    "Instances": label.instances,
+                    "Copies": label.instances,
                 }
 
                 # Populate optional fields based on configuration
@@ -1265,13 +1284,13 @@ def write_per_tag_breakdown_csv(
                     if customer_report_config.get("char_count", False):
                         row["Char Count"] = label.char_count
                     if customer_report_config.get("scale", False):
-                        row["Scale"] = "1.0"
+                        row["Scale"] = f"{label.horizontal_scale:.4f}"
                     if customer_report_config.get("label_size_sq_in", False):
                         row["Label Size (sq in)"] = f"{label.label_size[0] * label.label_size[1]:.2f}"
                     if customer_report_config.get("label_area_sq_ft", False):
                         row["Label Area (sq ft)"] = f"{sq_ft(label.label_size[0] * label.label_size[1]):.4f}"
                     if customer_report_config.get("linear_feet", False):
-                        row["Linear Feet"] = ""
+                        row["Linear Feet"] = f"{label.linear_feet:.2f}"
                     if customer_report_config.get("ink_sq_in", False):
                         row["Ink (sq in)"] = f"{label.ink_area_sq_in:.2f}"
                     if customer_report_config.get("ink_sq_ft", False):
