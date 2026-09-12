@@ -1361,9 +1361,12 @@ def write_per_tag_breakdown_csv(
             total_price = 0.0
             
             for label in labels:
-                label_size_sq_in = label.label_size[0] * label.label_size[1]
-                label_area_sqft = sq_ft(label_size_sq_in)
-                ink_sqft = sq_ft(label.ink_area_sq_in)
+                # Calculate total label area (multiplied by copies)
+                label_size_sq_in_per_copy = label.label_size[0] * label.label_size[1]
+                label_total_size_sq_in = label_size_sq_in_per_copy * label.instances
+                label_total_area_sqft = sq_ft(label_total_size_sq_in)
+                # ink_area_sq_in is already total (multiplied by copies in consolidation)
+                label_ink_sqft = sq_ft(label.ink_area_sq_in)
                 row = {
                     "Label Code": label.text,
                     "Copies": label.instances,
@@ -1371,20 +1374,20 @@ def write_per_tag_breakdown_csv(
                     "Text Height (in)": "2.00",
                     "Char Count": label.char_count,
                     "Scale": f"{label.horizontal_scale:.4f}",
-                    "Label Size (sq in)": f"{label_size_sq_in:.2f}",
-                    "Label Area (sq ft)": f"{label_area_sqft:.4f}",
+                    "Label Size (sq in)": f"{label_total_size_sq_in:.2f}",
+                    "Label Area (sq ft)": f"{label_total_area_sqft:.4f}",
                     "Linear Feet": f"{label.linear_feet:.2f}",
                     "Ink (sq in)": f"{label.ink_area_sq_in:.2f}",
-                    "Ink (sq ft)": f"{ink_sqft:.4f}",
+                    "Ink (sq ft)": f"{label_ink_sqft:.4f}",
                 }
                 # Accumulate numeric values
                 total_copies += label.instances
                 total_char_count += label.char_count
-                total_label_size_sq_in += label_size_sq_in
-                total_label_area_sqft += label_area_sqft
+                total_label_size_sq_in += label_total_size_sq_in
+                total_label_area_sqft += label_total_area_sqft
                 total_linear_feet += label.linear_feet
                 total_ink_sq_in += label.ink_area_sq_in
-                total_ink_sqft += ink_sqft
+                total_ink_sqft += label_ink_sqft
                 
                 if label.cost_breakdown:
                     cb = label.cost_breakdown
@@ -1524,13 +1527,16 @@ def write_per_tag_breakdown_csv(
                     if customer_report_config.get("scale", False):
                         row["Scale"] = f"{label.horizontal_scale:.4f}"
                     if customer_report_config.get("label_size_sq_in", False):
-                        label_size_sq_in = label.label_size[0] * label.label_size[1]
-                        row["Label Size (sq in)"] = f"{label_size_sq_in:.2f}"
-                        total_label_size_sq_in += label_size_sq_in
+                        label_size_sq_in_per_copy = label.label_size[0] * label.label_size[1]
+                        label_total_size_sq_in = label_size_sq_in_per_copy * label.instances
+                        row["Label Size (sq in)"] = f"{label_total_size_sq_in:.2f}"
+                        total_label_size_sq_in += label_total_size_sq_in
                     if customer_report_config.get("label_area_sq_ft", False):
-                        label_area_sqft = sq_ft(label.label_size[0] * label.label_size[1])
-                        row["Label Area (sq ft)"] = f"{label_area_sqft:.4f}"
-                        total_label_area_sqft += label_area_sqft
+                        label_size_sq_in_per_copy = label.label_size[0] * label.label_size[1]
+                        label_total_size_sq_in = label_size_sq_in_per_copy * label.instances
+                        label_total_area_sqft = sq_ft(label_total_size_sq_in)
+                        row["Label Area (sq ft)"] = f"{label_total_area_sqft:.4f}"
+                        total_label_area_sqft += label_total_area_sqft
                     if customer_report_config.get("linear_feet", False):
                         row["Linear Feet"] = f"{label.linear_feet:.2f}"
                         total_linear_feet += label.linear_feet
