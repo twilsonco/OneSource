@@ -840,6 +840,7 @@ def write_metrics_report_json(
             "page_width_in": PAGE_W_IN,
             "label_width_in": LABEL_W_IN,
             "label_height_in": LABEL_H_IN,
+            "text_height_in": TEXT_HEIGHT_IN,
             "copies_per_label": COPIES_PER_LABEL,
         },
         "global": with_sq_ft(asdict(global_metrics)),
@@ -978,7 +979,15 @@ def write_metrics_report(
         per_label, global_metrics, json_path, input_path, pdf_path, timestamp
     )
 
-    # Write CSV reports
+    # Write text and CSV reports
+    write_per_label_report(
+        per_label, out_path.with_name(f"{out_path.stem}_labels.txt"), include_costs=True
+    )
+    write_per_label_report(
+        per_label,
+        out_path.with_name(f"{out_path.stem}_labels_customer.txt"),
+        include_costs=False,
+    )
     write_metrics_report_csv(
         per_label, out_path.with_name(f"{out_path.stem}_report.csv"), include_costs=True
     )
@@ -989,6 +998,84 @@ def write_metrics_report(
     )
 
     return json_path
+
+
+def write_per_label_report(
+    per_label: list[LabelMetrics], output_path: Path, include_costs: bool = True
+) -> None:
+    """Write per-label metrics to a formatted text report.
+
+    If include_costs is True, includes full cost breakdown (for internal use).
+    If False, includes only code and unit price (for customers).
+    """
+    if not per_label:
+        return
+
+    lines: list[str] = []
+
+    if include_costs:
+        # Internal report: all columns
+        lines.append("-" * 160)
+        header = (
+            f"{'Label Code':<16} | {'Char Count':>5} | {'Scale':>7} | "
+            f"{'Ink (sq in)':>12} | {'Ink (sq ft)':>11} | "
+            f"{'Ink ($)':>10} | {'Substrate ($)':>13} | {'Print Hrs':>9} | "
+            f"{'Print ($)':>10} | {'Labor Hrs':>9} | {'Labor ($)':>10} | "
+            f"{'Total ($)':>10} | {'Unit ($)':>10}"
+        )
+        lines.append(header)
+        lines.append("-" * 160)
+
+        for m in per_label:
+            label_code = m.text[:16]
+            char_count = str(m.char_count)
+            scale = f"{m.horizontal_scale:.3f}"
+            ink_sq_in = f"{m.ink_area_sq_in:.4f}"
+            ink_sq_ft = f"{sq_ft(m.ink_area_sq_in):.4f}"
+
+            if m.cost_breakdown:
+                ink_cost = f"{m.cost_breakdown.ink_cost:.2f}"
+                substrate_cost = f"{m.cost_breakdown.substrate_cost:.2f}"
+                printer_hours = f"{m.cost_breakdown.printer_hours:.2f}"
+                printer_cost = f"{m.cost_breakdown.printer_cost:.2f}"
+                labor_hours = f"{m.cost_breakdown.labor_hours:.2f}"
+                labor_cost = f"{m.cost_breakdown.labor_cost:.2f}"
+                total_cost = f"{m.cost_breakdown.total_cost:.2f}"
+                unit_price = f"{m.cost_breakdown.unit_price:.2f}"
+            else:
+                ink_cost = ""
+                substrate_cost = ""
+                printer_hours = ""
+                printer_cost = ""
+                labor_hours = ""
+                labor_cost = ""
+                total_cost = ""
+                unit_price = ""
+
+            row = (
+                f"{label_code:<16} | {char_count:>5} | {scale:>7} | "
+                f"{ink_sq_in:>12} | {ink_sq_ft:>11} | "
+                f"{ink_cost:>10} | {substrate_cost:>13} | {printer_hours:>9} | "
+                f"{printer_cost:>10} | {labor_hours:>9} | {labor_cost:>10} | "
+                f"{total_cost:>10} | {unit_price:>10}"
+            )
+            lines.append(row)
+    else:
+        # Customer report: only label code and unit price
+        lines.append("-" * 40)
+        header = f"{'Label Code':<16} | {'Unit Price ($)':>12}"
+        lines.append(header)
+        lines.append("-" * 40)
+
+        for m in per_label:
+            label_code = m.text[:16]
+            unit_price = f"{m.cost_breakdown.unit_price:.2f}" if m.cost_breakdown else ""
+            row = f"{label_code:<16} | {unit_price:>12}"
+            lines.append(row)
+
+    lines.append("-" * 160 if include_costs else "-" * 40)
+    lines.append("")
+    output_path.write_text("\n".join(lines), encoding="utf-8")
 
 
 def write_metrics_report_csv(
