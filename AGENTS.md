@@ -4,7 +4,7 @@ Guidance for AI coding agents and human contributors working in this repository.
 
 ## Project Overview
 
-This workspace contains utilities for **preparing printing jobs for labels and tags** (e.g. layouts for large industrial label printers). Most work is delivered as **one-off scripts** in `scripts/` that read inputs from `data/` and emit print-ready output (PDF, PostScript, or similar).
+This workspace contains utilities for **preparing printing jobs for labels** (e.g. layouts for large industrial label printers). Most work is delivered as **one-off scripts** in `scripts/` that read inputs from `data/` and emit print-ready output (PDF, PostScript, or similar).
 
 ## Environment
 

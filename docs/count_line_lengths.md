@@ -7,7 +7,7 @@ how many lines have each character length. It prints one ASCII histogram table
 per file, plus a final `TOTAL (all files)` table with the combined counts.
 
 This is typically used to size label text before generating PDFs — for example
-to see how a tag list's codes are distributed by length before picking font
+to see how a label list's codes are distributed by length before picking font
 sizes or splitting jobs (see [`split_lines_by_length.md`](split_lines_by_length.md)).
 
 ## Usage
@@ -50,5 +50,5 @@ Nothing is written to disk.
 ## Example
 
 ```sh
-uv run python scripts/count_line_lengths.py "data/input/full_tag_lists"
+uv run python scripts/count_line_lengths.py "data/input/full_label_lists"
 ```

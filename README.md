@@ -1,6 +1,6 @@
 # OneSource
 
-Utility scripts for organizing label/tag printing jobs and generating
+Utility scripts for organizing label printing jobs and generating
 print-ready PDFs for vinyl label printing (large industrial label printers,
 e.g. 52in-wide rolls). Scripts live in [`scripts/`](scripts/), read inputs
 from [`data/`](data/), and emit PDFs plus metrics reports.
@@ -33,7 +33,7 @@ tooling (`ruff`, `mypy`, `types-reportlab`, `pypdf`).
 | `scripts/vinyl_label_prep.py` | Lay out vinyl labels (default 8in × 3in) on a 52in-wide page and emit a print-ready PDF plus per-job metrics reports (text + JSON). | [`docs/vinyl_label_prep.md`](docs/vinyl_label_prep.md) |
 | `scripts/vinyl_label_multi_job_report.py` | Consolidate the `*_report.json` metrics of many layout jobs into one combined material/ink report. | [`docs/vinyl_label_prep.md`](docs/vinyl_label_prep.md) |
 
-A typical vinyl label job flows: count line lengths → split tag lists by length →
+A typical vinyl label job flows: count line lengths → split label lists by length →
 generate a PDF per bucket with `vinyl_label_prep.py` → consolidate metrics
 with `vinyl_label_multi_job_report.py`. See
 [`docs/vinyl_label_prep.md`](docs/vinyl_label_prep.md) for the full pipeline

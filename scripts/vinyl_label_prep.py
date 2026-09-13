@@ -931,10 +931,10 @@ def write_metrics_report(
         lines.append(f"{format_label_size(size):<16} | {count:>6d}")
     lines.append("")
     lines.append(subrule)
-    lines.append("PER-TAG BREAKDOWN")
+    lines.append("PER-LABEL BREAKDOWN")
     lines.append(subrule)
 
-    # Build header and separator for per-tag table with optional cost columns
+    # Build header and separator for per-label table with optional cost columns
     if per_label and per_label[0].cost_breakdown is not None:
         lines.append(
             f"{'Label Code':<16} | {'Chars':>5} | {'Scale':>8} | "

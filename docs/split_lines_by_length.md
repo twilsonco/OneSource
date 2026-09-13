@@ -68,8 +68,8 @@ Exits with status `1` and a message on stderr when:
 ## Example
 
 ```sh
-# Group tag lists into length buckets, merging the two longest buckets
+# Group label lists into length buckets, merging the two longest buckets
 # across all input files:
 uv run python scripts/split_lines_by_length.py \
-    "data/input/full_tag_lists" 6,8,11,14,21 --combined 14,21
+    "data/input/full_label_lists" 6,8,11,14,21 --combined 14,21
 ```

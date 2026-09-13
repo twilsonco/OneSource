@@ -101,7 +101,7 @@ For each run the script writes three files:
    - Total label area and material yield (%)
    - Total ink area and average ink coverage per label (%)
    - Total character count
-   - Per-tag breakdown table (label code, chars, horizontal scale, ink area)
+   - Per-label breakdown table (label code, chars, horizontal scale, ink area)
 3. **`*_report.json`** — the same data in machine-readable form, consumed by
    `vinyl_label_multi_job_report.py` below.
 
@@ -152,7 +152,7 @@ The human-readable report contains:
   plus a total row.
 - **Job breakdown** — one row per contributing job: input file, roll width,
   labels, linear feet, and ink area.
-- **Per-tag breakdown** — one row per label code summed over every printed
+- **Per-label breakdown** — one row per label code summed over every printed
   instance across all jobs: jobs appearing in, copies, characters, and ink area.
 
 The JSON report mirrors the per-job schema (`job` metadata plus `global` and
@@ -163,12 +163,12 @@ own totals, so downstream tools can still attribute usage per job.
 
 ```sh
 # 1. See the length distribution, split into per-length files
-uv run python scripts/count_line_lengths.py "data/input/full_tag_lists"
-uv run python scripts/split_lines_by_length.py "data/input/full_tag_lists" 6,8,11,14,21
+uv run python scripts/count_line_lengths.py "data/input/full_label_lists"
+uv run python scripts/split_lines_by_length.py "data/input/full_label_lists" 6,8,11,14,21
 
 # 2. Generate a PDF + reports per length bucket
-uv run python scripts/vinyl_label_prep.py -i "data/input/full_tag_lists/output/*.txt"
+uv run python scripts/vinyl_label_prep.py -i "data/input/full_label_lists/output/*.txt"
 
 # 3. Consolidate all jobs' metrics into one report
-uv run python scripts/vinyl_label_multi_job_report.py "data/input/full_tag_lists/output"
+uv run python scripts/vinyl_label_multi_job_report.py "data/input/full_label_lists/output"
 ```

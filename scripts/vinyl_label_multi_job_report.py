@@ -88,7 +88,7 @@ class ConsolidatedLabel:
     """A single label code, summed over every printed instance of it.
 
     ``instances`` and ``ink_area_sq_in`` count every copy printed across every
-    job, so the per-tag table sums to the global totals.
+    job, so the per-label table sums to the global totals.
     """
 
     text: str
@@ -103,7 +103,7 @@ class ConsolidatedLabel:
 class ConsolidatedLabelBySize:
     """A single label code at a specific size, summed across jobs.
 
-    Used for per-tag-by-size breakdown reporting where each unique (text, size)
+    Used for per-label-by-size breakdown reporting where each unique (text, size)
     combination is tracked separately with its own aggregated metrics.
     """
 
@@ -369,6 +369,7 @@ def consolidate(
         total_printer_cost = 0.0
         total_labor_hours = 0.0
         total_labor_cost = 0.0
+        total_unit_price = 0.0
 
         for report in reports:
             gm = report.global_metrics
@@ -379,6 +380,7 @@ def consolidate(
                 total_printer_cost += gm.cost_breakdown.printer_cost
                 total_labor_hours += gm.cost_breakdown.labor_hours
                 total_labor_cost += gm.cost_breakdown.labor_cost
+                total_unit_price += gm.cost_breakdown.unit_price
 
         global_cost_total = (
             total_ink_cost
@@ -386,9 +388,14 @@ def consolidate(
             + total_printer_cost
             + total_labor_cost
         )
-        global_unit_price = global_cost_total * (
-            1.0 + pricing_config.markup_percent / 100.0
-        )
+        # If unit_prices were explicitly set (flat pricing), use their sum;
+        # otherwise recalculate from markup
+        if total_unit_price > 0:
+            global_unit_price = total_unit_price
+        else:
+            global_unit_price = global_cost_total * (
+                1.0 + pricing_config.markup_percent / 100.0
+            )
         global_cost_breakdown = CostBreakdown(
             ink_cost=total_ink_cost,
             substrate_cost=total_substrate_cost,
@@ -430,6 +437,7 @@ def consolidate_labels(
     instances: Counter[str] = Counter()
     ink_areas: dict[str, float] = {}
     total_costs: dict[str, float] = {}
+    unit_prices: dict[str, float] = {}
     ink_costs: dict[str, float] = {}
     substrate_costs: dict[str, float] = {}
     printer_hours: dict[str, float] = {}
@@ -448,6 +456,10 @@ def consolidate_labels(
                 cb = label.cost_breakdown
                 total_costs[label.text] = total_costs.get(label.text, 0.0) + (
                     cb.total_cost * report.copies_per_label
+                )
+                # Track unit_price (total price for this label across all copies)
+                unit_prices[label.text] = unit_prices.get(label.text, 0.0) + (
+                    cb.unit_price * report.copies_per_label
                 )
                 ink_costs[label.text] = ink_costs.get(label.text, 0.0) + (
                     cb.ink_cost * report.copies_per_label
@@ -473,11 +485,16 @@ def consolidate_labels(
         # Build cost breakdown if costs were accumulated
         cost_breakdown = None
         if text in total_costs:
-            unit_price = (
-                total_costs[text] * (1.0 + pricing_config.markup_percent / 100.0)
-                if pricing_config
-                else total_costs[text]
-            )
+            # Use unit_price if it was set (flat pricing), otherwise calculate from markup
+            if text in unit_prices and unit_prices[text] > 0:
+                final_unit_price = unit_prices[text]
+            elif pricing_config:
+                final_unit_price = total_costs[text] * (
+                    1.0 + pricing_config.markup_percent / 100.0
+                )
+            else:
+                final_unit_price = total_costs[text]
+            
             cost_breakdown = CostBreakdown(
                 ink_cost=ink_costs.get(text, 0.0),
                 substrate_cost=substrate_costs.get(text, 0.0),
@@ -486,7 +503,7 @@ def consolidate_labels(
                 labor_hours=labor_hours.get(text, 0.0),
                 labor_cost=labor_costs.get(text, 0.0),
                 total_cost=total_costs[text],
-                unit_price=unit_price,
+                unit_price=final_unit_price,
             )
 
         labels_list.append(
@@ -508,7 +525,7 @@ def consolidate_labels_by_size(
     """Consolidate label metrics grouped by label text and size.
 
     Each unique (label_text, label_size) combination is tracked separately,
-    allowing per-tag-by-size reporting. Since all labels in a job share the
+    allowing per-label-by-size reporting. Since all labels in a job share the
     same size, we can determine the size for each label from its report.
     """
     # Track metrics by (text, size) tuple
@@ -558,6 +575,7 @@ def consolidate_labels_by_size(
         total_labor_hours = 0.0
         total_labor_cost = 0.0
         total_cost = 0.0
+        total_unit_price = 0.0
 
         for copies, _, _, cb in entries:
             if cb:
@@ -568,13 +586,19 @@ def consolidate_labels_by_size(
                 total_labor_hours += cb.labor_hours * copies
                 total_labor_cost += cb.labor_cost * copies
                 total_cost += cb.total_cost * copies
+                total_unit_price += cb.unit_price * copies
 
         if total_cost > 0:
-            unit_price = (
-                total_cost * (1.0 + pricing_config.markup_percent / 100.0)
-                if pricing_config
-                else total_cost
-            )
+            # Use unit_price if it was set (flat pricing), otherwise calculate from markup
+            if total_unit_price > 0:
+                final_unit_price = total_unit_price
+            elif pricing_config:
+                final_unit_price = total_cost * (
+                    1.0 + pricing_config.markup_percent / 100.0
+                )
+            else:
+                final_unit_price = total_cost
+            
             cost_breakdown = CostBreakdown(
                 ink_cost=total_ink_cost,
                 substrate_cost=total_substrate_cost,
@@ -583,7 +607,7 @@ def consolidate_labels_by_size(
                 labor_hours=total_labor_hours,
                 labor_cost=total_labor_cost,
                 total_cost=total_cost,
-                unit_price=unit_price,
+                unit_price=final_unit_price,
             )
 
         result.append(
@@ -621,6 +645,7 @@ def consolidate_size_areas(
     """
     totals: dict[LabelSize, list[float]] = {}
     cost_totals: dict[LabelSize, dict[str, float]] = {}
+    unit_price_totals: dict[LabelSize, float] = {}
 
     for report in reports:
         gm = report.global_metrics
@@ -645,6 +670,7 @@ def consolidate_size_areas(
                         "labor_cost": 0.0,
                         "total_cost": 0.0,
                     }
+                    unit_price_totals[size] = 0.0
                 cost_totals[size]["ink_cost"] += cb.ink_cost * share
                 cost_totals[size]["substrate_cost"] += cb.substrate_cost * share
                 cost_totals[size]["printer_hours"] += cb.printer_hours * share
@@ -652,17 +678,23 @@ def consolidate_size_areas(
                 cost_totals[size]["labor_hours"] += cb.labor_hours * share
                 cost_totals[size]["labor_cost"] += cb.labor_cost * share
                 cost_totals[size]["total_cost"] += cb.total_cost * share
+                unit_price_totals[size] += cb.unit_price * share
 
     result = {}
     for size, (substrate, material, ink) in totals.items():
         cost_breakdown = None
         if size in cost_totals and cost_totals[size]["total_cost"] > 0:
             ct = cost_totals[size]
-            unit_price = (
-                ct["total_cost"] * (1.0 + pricing_config.markup_percent / 100.0)
-                if pricing_config
-                else ct["total_cost"]
-            )
+            # Use unit_price if it was set (flat pricing), otherwise calculate from markup
+            if size in unit_price_totals and unit_price_totals[size] > 0:
+                unit_price = unit_price_totals[size]
+            elif pricing_config:
+                unit_price = ct["total_cost"] * (
+                    1.0 + pricing_config.markup_percent / 100.0
+                )
+            else:
+                unit_price = ct["total_cost"]
+            
             cost_breakdown = CostBreakdown(
                 ink_cost=ct["ink_cost"],
                 substrate_cost=ct["substrate_cost"],
@@ -947,7 +979,7 @@ def write_consolidated_report(
         )
     lines.append("")
     lines.append(subrule)
-    lines.append("PER-TAG BREAKDOWN")
+    lines.append("PER-LABEL BREAKDOWN")
     lines.append(subrule)
     lines.append(
         f"{'Label Code':<16} | {'Jobs':>4} | {'Copies':>5} | {'Chars':>5} | "
@@ -1297,13 +1329,13 @@ def write_job_breakdown_csv(
             writer.writerow(total_row)
 
 
-def write_per_tag_breakdown_csv(
+def write_per_label_breakdown_csv(
     labels: list[ConsolidatedLabelBySize],
     output_path: Path,
     include_costs: bool = True,
     customer_report_config: dict[str, bool] | None = None,
 ) -> None:
-    """Write per-tag breakdown to a CSV file.
+    """Write per-label breakdown to a CSV file.
 
     If include_costs is False, only customer-facing columns are written,
     controlled by customer_report_config. If include_costs is True, all
@@ -1816,14 +1848,14 @@ def main(argv: list[str] | None = None) -> None:
         out_path.with_name(f"{out_path.stem}_job_breakdown_customer.csv"),
         include_costs=False,
     )
-    write_per_tag_breakdown_csv(
+    write_per_label_breakdown_csv(
         labels_by_size,
-        out_path.with_name(f"{out_path.stem}_tag_breakdown.csv"),
+        out_path.with_name(f"{out_path.stem}_label_breakdown.csv"),
         include_costs=True,
     )
-    write_per_tag_breakdown_csv(
+    write_per_label_breakdown_csv(
         labels_by_size,
-        out_path.with_name(f"{out_path.stem}_tag_breakdown_customer.csv"),
+        out_path.with_name(f"{out_path.stem}_label_breakdown_customer.csv"),
         include_costs=False,
         customer_report_config=pricing_config.customer_report if pricing_config else None,
     )
