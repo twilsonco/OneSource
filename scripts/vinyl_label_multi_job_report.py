@@ -1592,15 +1592,6 @@ def write_size_breakdown_csv(
                     total_row[key] = ""  # Non-summable
             
             writer.writerow(total_row)
-            
-            # Write TOTAL row
-            total_row = {
-                "Label Size (WxH)": "TOTAL",
-                "Labels": total_labels,
-                "Price ($)": f"{total_price:.2f}",
-                "Unit Price ($)": "",  # Non-summable
-            }
-            writer.writerow(total_row)
 
 
 def write_job_breakdown_csv(
