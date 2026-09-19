@@ -613,6 +613,41 @@ def parse_labels(path: Path) -> list[str]:
     return labels
 
 
+# --- Output path organization --------------------------------------------------
+
+
+def organize_output_paths(base_path: Path, basename: str) -> dict[str, Path]:
+    """Organize output paths into subdirectories adjacent to input file.
+
+    Creates subdirectories next to the input file for organizing output by type:
+    - "PDF Files" for PDFs
+    - "Job Report" for TXT reports
+    - "json" for JSON reports
+    - "csv" for CSV reports
+
+    Returns a dict mapping output type to output path, creating directories if needed.
+    """
+    base_dir = base_path.parent
+    pdf_dir = base_dir / "PDF Files"
+    report_dir = base_dir / "Job Report"
+    json_dir = base_dir / "json"
+    csv_dir = base_dir / "csv"
+
+    # Create directories if they don't exist
+    for d in [pdf_dir, report_dir, json_dir, csv_dir]:
+        d.mkdir(parents=True, exist_ok=True)
+
+    return {
+        "pdf": pdf_dir / f"{basename}.pdf",
+        "txt": report_dir / f"{basename}_report.txt",
+        "json": json_dir / f"{basename}_report.json",
+        "txt_labels": report_dir / f"{basename}_labels.txt",
+        "txt_labels_customer": report_dir / f"{basename}_labels_customer.txt",
+        "csv_report": csv_dir / f"{basename}_report.csv",
+        "csv_report_customer": csv_dir / f"{basename}_report_customer.csv",
+    }
+
+
 # --- Layout helpers -----------------------------------------------------------
 
 
@@ -953,15 +988,20 @@ def write_metrics_report_json(
 def write_metrics_report(
     per_label: list[LabelMetrics],
     global_metrics: GlobalMetrics,
-    out_path: Path,
+    txt_path: Path,
+    json_path: Path,
+    labels_txt_path: Path,
+    labels_customer_txt_path: Path,
+    csv_path: Path,
+    csv_customer_path: Path,
     input_path: Path,
     pdf_path: Path,
 ) -> Path:
-    """Write a human-readable metrics report to ``out_path``.
+    """Write a human-readable metrics report to ``txt_path``.
 
-    Also writes a machine-readable JSON sibling report next to it (the
-    ``.txt`` suffix, if any, is replaced with ``.json``) so that totals can be
-    consolidated across jobs. Returns the path of the JSON report.
+    Also writes a machine-readable JSON sibling report to ``json_path``,
+    per-label reports, and CSV reports to their respective paths.
+    Returns the path of the JSON report.
     """
     linear_feet = global_metrics.linear_feet
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1072,28 +1112,27 @@ def write_metrics_report(
     lines.append(rule)
     lines.append("")
 
-    out_path.write_text("\n".join(lines), encoding="utf-8")
+    txt_path.write_text("\n".join(lines), encoding="utf-8")
 
-    json_path = out_path.with_suffix(".json")
     write_metrics_report_json(
         per_label, global_metrics, json_path, input_path, pdf_path, timestamp
     )
 
     # Write text and CSV reports
     write_per_label_report(
-        per_label, out_path.with_name(f"{out_path.stem}_labels.txt"), include_costs=True
+        per_label, labels_txt_path, include_costs=True
     )
     write_per_label_report(
         per_label,
-        out_path.with_name(f"{out_path.stem}_labels_customer.txt"),
+        labels_customer_txt_path,
         include_costs=False,
     )
     write_metrics_report_csv(
-        per_label, out_path.with_name(f"{out_path.stem}_report.csv"), include_costs=True
+        per_label, csv_path, include_costs=True
     )
     write_metrics_report_csv(
         per_label,
-        out_path.with_name(f"{out_path.stem}_report_customer.csv"),
+        csv_customer_path,
         include_costs=False,
     )
 
@@ -1775,10 +1814,20 @@ def process_job(
     if not labels:
         raise SystemExit(f"No labels found in {config.input_path}")
 
-    out_path = config.output_path or config.input_path.with_suffix(".pdf")
+    # Organize output paths based on input file location
+    base_name = config.input_path.stem
     if config.vertical_labels:
-        out_path = out_path.with_name(f"{out_path.stem}_vertical{out_path.suffix}")
-    report_path = out_path.with_name(f"{out_path.stem}_report.txt")
+        base_name = f"{base_name}_vertical"
+    organized_paths = organize_output_paths(config.input_path, base_name)
+
+    # Override with explicit output path if provided, but still use organized subdirs
+    if config.output_path is not None:
+        # Use custom output path for PDF, but organize reports in subdirs
+        out_path = config.output_path
+        if config.vertical_labels and not str(out_path).endswith("_vertical.pdf"):
+            out_path = out_path.with_name(f"{out_path.stem}_vertical{out_path.suffix}")
+    else:
+        out_path = organized_paths["pdf"]
 
     font_name, font_path = _register_bold_font(config.font_path)
     per_label, global_metrics = calculate_metrics(
@@ -1793,12 +1842,21 @@ def process_job(
         flat_label_price,
     )
     json_report_path = write_metrics_report(
-        per_label, global_metrics, report_path, config.input_path, out_path
+        per_label,
+        global_metrics,
+        organized_paths["txt"],
+        organized_paths["json"],
+        organized_paths["txt_labels"],
+        organized_paths["txt_labels_customer"],
+        organized_paths["csv_report"],
+        organized_paths["csv_report_customer"],
+        config.input_path,
+        out_path,
     )
     print(
         f"Wrote {n} label instances "
         f"({len(labels)} unique x {COPIES_PER_LABEL}) to {out_path}\n"
-        f"Wrote metrics report to {report_path}\n"
+        f"Wrote metrics report to {organized_paths['txt']}\n"
         f"Wrote JSON metrics report to {json_report_path}"
     )
 

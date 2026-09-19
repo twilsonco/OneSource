@@ -355,6 +355,46 @@ def load_reports(directory: Path, skip: frozenset[Path]) -> list[JobReport]:
     return [load_report(path) for path in paths]
 
 
+# --- Output path organization --------------------------------------------------
+
+
+def organize_output_paths(input_directory: Path, basename: str) -> dict[str, Path]:
+    """Organize output paths into a "Multi-Job Report" directory adjacent to input.
+
+    Creates a "Multi-Job Report" directory at the same level as the input directory,
+    with the following structure:
+    - Multi-Job Report/
+      - txt files (main directory)
+      - csv/ (subdirectory for CSV reports)
+      - json/ (subdirectory for JSON reports)
+
+    Returns a dict mapping output type to output path, creating directories if needed.
+    """
+    # Create "Multi-Job Report" directory adjacent to the input directory
+    output_root = input_directory.parent / "Multi-Job Report"
+    csv_dir = output_root / "csv"
+    json_dir = output_root / "json"
+
+    # Create directories if they don't exist
+    for d in [output_root, csv_dir, json_dir]:
+        d.mkdir(parents=True, exist_ok=True)
+
+    return {
+        "txt": output_root / f"{basename}.txt",
+        "json": json_dir / f"{basename}.json",
+        "txt_labels": output_root / f"{basename}_labels.txt",
+        "txt_labels_customer": output_root / f"{basename}_labels_customer.txt",
+        "txt_labels_xlsx": output_root / f"{basename}_labels.xlsx",
+        "txt_labels_customer_xlsx": output_root / f"{basename}_labels_customer.xlsx",
+        "csv_size_breakdown": csv_dir / f"{basename}_size_breakdown.csv",
+        "csv_size_breakdown_customer": csv_dir / f"{basename}_size_breakdown_customer.csv",
+        "csv_job_breakdown": csv_dir / f"{basename}_job_breakdown.csv",
+        "csv_job_breakdown_customer": csv_dir / f"{basename}_job_breakdown_customer.csv",
+        "csv_label_breakdown": csv_dir / f"{basename}_label_breakdown.csv",
+        "csv_label_breakdown_customer": csv_dir / f"{basename}_label_breakdown_customer.csv",
+    }
+
+
 # --- Consolidation -------------------------------------------------------------
 
 
@@ -818,13 +858,16 @@ def write_consolidated_report(
     reports: list[JobReport],
     out_path: Path,
     directory: Path,
+    json_path: Path | None = None,
 ) -> Path:
     """Write a human-readable consolidated report to ``out_path``.
 
-    Also writes a machine-readable JSON sibling report next to it (the
-    ``.txt`` suffix, if any, is replaced with ``.json``). Returns the path of
+    Also writes a machine-readable JSON sibling report to ``json_path``
+    (or derived from out_path if not provided). Returns the path of
     the JSON report.
     """
+    if json_path is None:
+        json_path = out_path.with_suffix(".json")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     roll_desc = "/".join(f"{width:g}in" for width in roll_widths_in(reports))
 
@@ -981,7 +1024,7 @@ def write_consolidated_report(
     )
     for report in reports:
         gm = report.global_metrics
-        input_file = display_input_file(report.input_file, directory)
+        input_file = display_input_file(report.input_file, directory.parent)
         lines.append(
             f"{input_file:<38} | {report.page_width_in:>5.0f} | "
             f"{gm.total_output_labels:>6d} | {gm.linear_feet:>9.2f} | "
@@ -1010,7 +1053,6 @@ def write_consolidated_report(
 
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
-    json_path = out_path.with_suffix(".json")
     write_consolidated_report_json(
         metrics, sizes, size_areas, labels, reports, json_path, directory, timestamp
     )
@@ -1046,7 +1088,8 @@ def write_per_label_report(
         lines.append("-" * 180)
 
         for report in reports:
-            job_name = display_input_file(report.input_file, directory)
+            job_name = display_input_file(report.input_file, directory.parent)
+            job_name = Path(job_name).stem  # Remove file extension
             for m in report.per_label:
                 label_code = m.text[:16]
                 char_count = str(m.char_count)
@@ -1089,7 +1132,8 @@ def write_per_label_report(
         lines.append("-" * 60)
 
         for report in reports:
-            job_name = display_input_file(report.input_file, directory)
+            job_name = display_input_file(report.input_file, directory.parent)
+            job_name = Path(job_name).stem  # Remove file extension
             for m in report.per_label:
                 label_code = m.text[:16]
                 unit_price = f"{m.cost_breakdown.unit_price:.2f}" if m.cost_breakdown else ""
@@ -1142,9 +1186,12 @@ def write_per_label_report_xlsx(
 
         for report in reports:
             # Create sheet for this job
-            job_name = display_input_file(report.input_file, directory)
-            # Limit sheet name to 31 characters (Excel limit)
-            sheet_name = job_name[:31]
+            job_name = display_input_file(report.input_file, directory.parent)
+            job_name = Path(job_name).stem  # Remove file extension
+            # Sanitize sheet name: remove invalid Excel characters (/, \, ?, *, :, [, ])
+            # and limit to 31 characters (Excel limit)
+            sanitized = job_name.replace("/", "-").replace("\\", "-").replace("?", "").replace("*", "").replace(":", "").replace("[", "").replace("]", "")
+            sheet_name = sanitized[:31]
             ws = wb.create_sheet(title=sheet_name)
 
             # Add headers
@@ -1221,9 +1268,12 @@ def write_per_label_report_xlsx(
 
         for report in reports:
             # Create sheet for this job
-            job_name = display_input_file(report.input_file, directory)
-            # Limit sheet name to 31 characters (Excel limit)
-            sheet_name = job_name[:31]
+            job_name = display_input_file(report.input_file, directory.parent)
+            job_name = Path(job_name).stem  # Remove file extension
+            # Sanitize sheet name: remove invalid Excel characters (/, \, ?, *, :, [, ])
+            # and limit to 31 characters (Excel limit)
+            sanitized = job_name.replace("/", "-").replace("\\", "-").replace("?", "").replace("*", "").replace(":", "").replace("[", "").replace("]", "")
+            sheet_name = sanitized[:31]
             ws = wb.create_sheet(title=sheet_name)
 
             # Add headers
@@ -1642,7 +1692,7 @@ def write_job_breakdown_csv(
             
             for report in reports:
                 gm = report.global_metrics
-                input_file = display_input_file(report.input_file, directory)
+                input_file = display_input_file(report.input_file, directory.parent)
                 # Format label sizes as "WxH" (e.g., "10x4, 12x4")
                 label_size_str = ", ".join(
                     format_label_size(size) for size in sorted(report.label_sizes.keys())
@@ -1777,7 +1827,7 @@ def write_job_breakdown_csv(
             
             for report in reports:
                 gm = report.global_metrics
-                input_file = display_input_file(report.input_file, directory)
+                input_file = display_input_file(report.input_file, directory.parent)
                 label_area_sqft = sq_ft(gm.total_label_material_sq_in)
                 
                 row = {
@@ -2336,8 +2386,19 @@ def main(argv: list[str] | None = None) -> None:
     if not directory.is_dir():
         raise SystemExit(f"Not a directory: {directory}")
 
-    out_path: Path = args.output or directory / "vinyl_labels_combined.txt"
-    skip = frozenset({out_path.resolve(), out_path.with_suffix(".json").resolve()})
+    # Organize output paths into subdirectories
+    basename = "vinyl_labels_combined"
+    organized_paths = organize_output_paths(directory, basename)
+
+    # Override output path if provided, but still use organized subdirs for reports
+    if args.output is not None:
+        out_path: Path = args.output
+    else:
+        out_path = organized_paths["txt"]
+
+    # Build skip set to avoid re-processing our own output
+    skip_paths = {out_path.resolve(), organized_paths["json"].resolve()}
+    skip = frozenset(skip_paths)
 
     # Load pricing config
     pricing_config_path = None
@@ -2376,21 +2437,21 @@ def main(argv: list[str] | None = None) -> None:
     labels = consolidate_labels(reports, pricing_config)
     labels_by_size = consolidate_labels_by_size(reports, pricing_config)
     json_report_path = write_consolidated_report(
-        metrics, sizes, size_areas, labels, reports, out_path, directory
+        metrics, sizes, size_areas, labels, reports, out_path, directory, organized_paths["json"]
     )
 
     # Write CSV reports
     write_size_breakdown_csv(
         sizes,
         size_areas,
-        out_path.with_name(f"{out_path.stem}_size_breakdown.csv"),
+        organized_paths["csv_size_breakdown"],
         include_costs=True,
         reports=reports,
     )
     write_size_breakdown_csv(
         sizes,
         size_areas,
-        out_path.with_name(f"{out_path.stem}_size_breakdown_customer.csv"),
+        organized_paths["csv_size_breakdown_customer"],
         include_costs=False,
         reports=reports,
         customer_report_config=pricing_config.customer_report if pricing_config else None,
@@ -2398,49 +2459,49 @@ def main(argv: list[str] | None = None) -> None:
     write_job_breakdown_csv(
         reports,
         directory,
-        out_path.with_name(f"{out_path.stem}_job_breakdown.csv"),
+        organized_paths["csv_job_breakdown"],
         include_costs=True,
     )
     write_job_breakdown_csv(
         reports,
         directory,
-        out_path.with_name(f"{out_path.stem}_job_breakdown_customer.csv"),
+        organized_paths["csv_job_breakdown_customer"],
         include_costs=False,
         customer_report_config=pricing_config.customer_report if pricing_config else None,
     )
     write_per_label_report(
         reports,
-        out_path.with_name(f"{out_path.stem}_labels.txt"),
+        organized_paths["txt_labels"],
         directory,
         include_costs=True,
     )
     write_per_label_report(
         reports,
-        out_path.with_name(f"{out_path.stem}_labels_customer.txt"),
+        organized_paths["txt_labels_customer"],
         directory,
         include_costs=False,
     )
     write_per_label_report_xlsx(
         reports,
-        out_path.with_name(f"{out_path.stem}_labels.xlsx"),
+        organized_paths["txt_labels_xlsx"],
         directory,
         include_costs=True,
     )
     write_per_label_report_xlsx(
         reports,
-        out_path.with_name(f"{out_path.stem}_labels_customer.xlsx"),
+        organized_paths["txt_labels_customer_xlsx"],
         directory,
         include_costs=False,
         customer_report_config=pricing_config.customer_report if pricing_config else None,
     )
     write_per_label_breakdown_csv(
         labels_by_size,
-        out_path.with_name(f"{out_path.stem}_label_breakdown.csv"),
+        organized_paths["csv_label_breakdown"],
         include_costs=True,
     )
     write_per_label_breakdown_csv(
         labels_by_size,
-        out_path.with_name(f"{out_path.stem}_label_breakdown_customer.csv"),
+        organized_paths["csv_label_breakdown_customer"],
         include_costs=False,
         customer_report_config=pricing_config.customer_report if pricing_config else None,
     )
