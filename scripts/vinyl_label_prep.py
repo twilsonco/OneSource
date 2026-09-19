@@ -184,6 +184,14 @@ DRAW_SHEET_SEPARATORS: bool = True
 SHEET_SEPARATOR_COLOR_DEFAULT: str = "blue"
 SHEET_SEPARATOR_COLOR: object = parse_color(SHEET_SEPARATOR_COLOR_DEFAULT)
 
+# Text color for labels (default: black).
+TEXT_COLOR_DEFAULT: str = "black"
+TEXT_COLOR: object = parse_color(TEXT_COLOR_DEFAULT)
+
+# Border color for labels (default: black).
+BORDER_COLOR_DEFAULT: str = "black"
+BORDER_COLOR: object = parse_color(BORDER_COLOR_DEFAULT)
+
 TEXT_HEIGHT_IN: float = 2.0  # cap height of the label text
 
 # Cap-height-to-font-size ratio: Arial Bold reports HHeight = 728/1000 (0.728),
@@ -229,8 +237,10 @@ class JobConfig:
 
     draw_border: bool = DRAW_BORDER
     border_line_width_pt: float = BORDER_LINE_WIDTH_PT
+    border_color: object = BORDER_COLOR
     draw_sheet_separators: bool = DRAW_SHEET_SEPARATORS
     sheet_separator_color: object = SHEET_SEPARATOR_COLOR
+    text_color: object = TEXT_COLOR
 
     text_height_in: float = TEXT_HEIGHT_IN
     cap_height_ratio: float = CAP_HEIGHT_RATIO
@@ -344,8 +354,8 @@ def apply_layout_config(config: JobConfig) -> None:
     global LABELS_PER_SHEET_ROW, LABELS_PER_SHEET_COL
     global SHEET_COLS, SHEET_W_IN, SHEET_H_IN, LABELS_PER_SHEET
     global SHEETS_PER_ROW, HORIZONTAL_GAP_IN, VERTICAL_GAP_IN
-    global COPIES_PER_LABEL, DRAW_BORDER, BORDER_LINE_WIDTH_PT, DRAW_SHEET_SEPARATORS
-    global SHEET_SEPARATOR_COLOR, TEXT_HEIGHT_IN, CAP_HEIGHT_RATIO, FONT_SIZE_PT
+    global COPIES_PER_LABEL, DRAW_BORDER, BORDER_LINE_WIDTH_PT, BORDER_COLOR, DRAW_SHEET_SEPARATORS
+    global SHEET_SEPARATOR_COLOR, TEXT_COLOR, TEXT_HEIGHT_IN, CAP_HEIGHT_RATIO, FONT_SIZE_PT
 
     PAGE_W_IN = config.page_w_in
     PAGE_LEFT_MARGIN_IN = config.page_left_margin_in
@@ -373,8 +383,10 @@ def apply_layout_config(config: JobConfig) -> None:
 
     DRAW_BORDER = config.draw_border
     BORDER_LINE_WIDTH_PT = config.border_line_width_pt
+    BORDER_COLOR = config.border_color
     DRAW_SHEET_SEPARATORS = config.draw_sheet_separators
     SHEET_SEPARATOR_COLOR = config.sheet_separator_color
+    TEXT_COLOR = config.text_color
 
     TEXT_HEIGHT_IN = config.text_height_in
     CAP_HEIGHT_RATIO = config.cap_height_ratio
@@ -1253,7 +1265,7 @@ def draw_label_border(c: Canvas, x_in: float, y_in: float) -> None:
     """
     c.saveState()
     c.setLineWidth(BORDER_LINE_WIDTH_PT)
-    c.setStrokeColor(black)
+    c.setStrokeColor(BORDER_COLOR)
     c.rect(
         x_in * 72.0,
         y_in * 72.0,
@@ -1353,7 +1365,7 @@ def draw_label(
         # Apply horizontal scaling
         c.scale(scale, 1.0)
     c.setFont(font_name, FONT_SIZE_PT)
-    c.setFillColor(black)
+    c.setFillColor(TEXT_COLOR)
     # Draw text centered at the origin, with vertical offset to center the cap height.
     # drawCentredString centers horizontally but places the baseline at y;
     # shift down by half the cap height so the text's middle is at the midpoint.
@@ -1603,6 +1615,14 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         help="Border weight in points.",
     )
     output.add_argument(
+        "--border-color",
+        type=str,
+        default=BORDER_COLOR_DEFAULT,
+        help="Color of label borders (default: black). "
+        "Accepts preset names (black/k, blue/b, green/g, red/r, orange/o, yellow/y, violet/v), "
+        "RGB format (r,g,b) or r,g,b with ints in [0,255], or hex format (aabbcc, 6 hex digits).",
+    )
+    output.add_argument(
         "--sheet-separators",
         action=argparse.BooleanOptionalAction,
         default=DRAW_SHEET_SEPARATORS,
@@ -1629,6 +1649,14 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         type=float,
         default=CAP_HEIGHT_RATIO,
         help="Cap height as a fraction of font size for the drawn font.",
+    )
+    text.add_argument(
+        "--text-color",
+        type=str,
+        default=TEXT_COLOR_DEFAULT,
+        help="Color of label text (default: black). "
+        "Accepts preset names (black/k, blue/b, green/g, red/r, orange/o, yellow/y, violet/v), "
+        "RGB format (r,g,b) or r,g,b with ints in [0,255], or hex format (aabbcc, 6 hex digits).",
     )
 
     pricing = parser.add_argument_group("pricing", "cost configuration and pricing")
@@ -1689,9 +1717,19 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
 
     args = parser.parse_args(argv)
 
-    # Parse separator color with error handling
+    # Parse separator, text, and border colors with error handling
     try:
         separator_color = parse_color(args.sheet_separator_color)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    try:
+        text_color = parse_color(args.text_color)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    try:
+        border_color = parse_color(args.border_color)
     except ValueError as exc:
         parser.error(str(exc))
 
@@ -1714,8 +1752,10 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         copies_per_label=int(args.copies),
         draw_border=bool(args.border),
         border_line_width_pt=float(args.border_line_width),
+        border_color=border_color,
         draw_sheet_separators=bool(args.sheet_separators),
         sheet_separator_color=separator_color,
+        text_color=text_color,
         text_height_in=float(args.text_height),
         cap_height_ratio=float(args.cap_height_ratio),
         vertical_labels=bool(args.vertical_labels),
