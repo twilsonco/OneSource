@@ -49,7 +49,7 @@ uv add --dev ruff mypy
 - Keep scripts **standalone and re-runnable**: parse CLI args with `argparse` or `sys.argv`, and accept input/output paths as flags rather than baking them in.
 - Prefer **stdlib** (`csv`, `pathlib`, `argparse`, `dataclasses`) for one-offs. Add a real dependency only when it pays for itself (e.g. `reportlab`, `pillow`, `pypdf`).
 - Prefer **`fpdf2`** or **`reportlab`** for PDF generation when a layout is non-trivial. For raw PostScript, generate text and pipe to `enscript`/`a2ps` or write PS directly when needed.
-- Label layout work (e.g. the `2027-7-2 labels.txt` job) should be expressed in **inches or points with named constants**, not magic numbers:
+- Label layout work (e.g. the `2027-7-2 labels.txt` job) should be expressed in **inches with named constants**, not magic numbers:
   ```python
   LABEL_W_IN = 8.0
   LABEL_H_IN = 3.0
