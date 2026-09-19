@@ -6,7 +6,7 @@ character-count ranges. For example, ``6,8,11,14,21`` yields the ranges 1-6,
 the largest bound land there). Each input ``*.txt`` file is read with
 leading/trailing whitespace stripped from every line (blank lines skipped,
 original order preserved), and each range gets its own output files under
-``<directory>/output``.
+``<directory>/split_label_lists``.
 
 By default every range produces one output file per input file, named
 ``<input_stem>_<upper>-chars.txt``. Ranges listed in ``--combined`` (whose
@@ -178,7 +178,7 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 per_file.setdefault((path.name, index), []).append(line)
 
-    output_dir = directory / "output"
+    output_dir = directory / "split_label_lists"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Per-bucket report rows of (output file name, lines written), filled as
