@@ -35,6 +35,77 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont as RLTTFont
 from reportlab.pdfgen.canvas import Canvas
 
+# --- Color utilities ---------------------------------------------------------
+
+# Preset color names mapping to reportlab colors
+_PRESET_COLORS: dict[str, object] = {
+    "black": black,
+    "k": black,
+    "blue": blue,
+    "b": blue,
+    "green": green,
+    "g": green,
+    "red": red,
+    "r": red,
+    "orange": orange,
+    "o": orange,
+    "yellow": yellow,
+    "y": yellow,
+    "violet": RLHexColor("#8B00FF"),  # violet (not in standard reportlab)
+    "v": RLHexColor("#8B00FF"),
+}
+
+
+def parse_color(color_str: str) -> object:
+    """Parse a color specification into a reportlab color object.
+
+    Accepts:
+    - Preset names: black, k, blue, b, green, g, red, r, orange, o, yellow, y, violet, v
+    - RGB format: r,g,b or (r,g,b) where r,g,b are ints in [0,255]
+    - Hex format: aabbcc (6 hex digits, no number-sign)
+
+    Returns a reportlab color object.
+    Raises ValueError if the color specification is invalid.
+    """
+    # Check preset colors first
+    if color_str in _PRESET_COLORS:
+        return _PRESET_COLORS[color_str]
+
+    # Try RGB format: r,g,b or (r,g,b)
+    # Strip optional parentheses if present
+    rgb_candidate = color_str
+    if rgb_candidate.startswith("(") and rgb_candidate.endswith(")"):
+        rgb_candidate = rgb_candidate[1:-1]
+
+    # Check if it looks like RGB (contains commas)
+    if "," in rgb_candidate:
+        try:
+            parts = [p.strip() for p in rgb_candidate.split(",")]
+            if len(parts) != 3:
+                raise ValueError(
+                    f"RGB color must have 3 components, got {len(parts)}: {color_str}"
+                )
+            r, g, b = [int(p) for p in parts]
+            if not all(0 <= val <= 255 for val in (r, g, b)):
+                raise ValueError(
+                    f"RGB values must be in [0, 255], got r={r}, g={g}, b={b}"
+                )
+            return RLHexColor(f"#{r:02x}{g:02x}{b:02x}")
+        except ValueError as exc:
+            raise ValueError(f"Invalid RGB color format {color_str}: {exc}") from exc
+
+    # Try hex format: aabbcc (6 hex digits, no number-sign)
+    try:
+        # Validate hex format: must be exactly 6 characters
+        if len(color_str) != 6:
+            raise ValueError(
+                f"Hex color must be 6 digits (got {len(color_str)}): {color_str}"
+            )
+        # Attempt to parse; RLHexColor raises ValueError on invalid hex
+        return RLHexColor(f"#{color_str}")
+    except ValueError as exc:
+        raise ValueError(f"Invalid hex color format {color_str}: {exc}") from exc
+
 # --- Geometry (inches) --------------------------------------------------------
 
 # These constants are the script's defaults; each one can be overridden from
@@ -110,26 +181,8 @@ BORDER_LINE_WIDTH_PT: float = 0.5  # ~0.5pt is the standard "hairline" weight
 
 # Hairline separators drawn at the midpoint of sheet gaps. Set to False to disable.
 DRAW_SHEET_SEPARATORS: bool = True
-
-# Color mapping for sheet separators. Maps short and long names to reportlab colors.
-_SHEET_SEPARATOR_COLORS: dict[str, object] = {
-    "black": black,
-    "k": black,
-    "blue": blue,
-    "b": blue,
-    "green": green,
-    "g": green,
-    "red": red,
-    "r": red,
-    "orange": orange,
-    "o": orange,
-    "yellow": yellow,
-    "y": yellow,
-    "violet": RLHexColor("#8B00FF"),  # violet (not in standard reportlab)
-    "v": RLHexColor("#8B00FF"),
-}
 SHEET_SEPARATOR_COLOR_DEFAULT: str = "blue"
-SHEET_SEPARATOR_COLOR: object = _SHEET_SEPARATOR_COLORS[SHEET_SEPARATOR_COLOR_DEFAULT]
+SHEET_SEPARATOR_COLOR: object = parse_color(SHEET_SEPARATOR_COLOR_DEFAULT)
 
 TEXT_HEIGHT_IN: float = 2.0  # cap height of the label text
 
@@ -1559,23 +1612,9 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         "--sheet-separator-color",
         type=str,
         default=SHEET_SEPARATOR_COLOR_DEFAULT,
-        choices=[
-            "black",
-            "k",
-            "blue",
-            "b",
-            "green",
-            "g",
-            "red",
-            "r",
-            "orange",
-            "o",
-            "yellow",
-            "y",
-            "violet",
-            "v",
-        ],
-        help="Color of sheet separator hairlines (default: blue). Accepts long names or single-letter shortcuts.",
+        help="Color of sheet separator hairlines (default: blue). "
+        "Accepts preset names (black/k, blue/b, green/g, red/r, orange/o, yellow/y, violet/v), "
+        "RGB format (r,g,b) or r,g,b with ints in [0,255], or hex format (aabbcc, 6 hex digits).",
     )
 
     text = parser.add_argument_group("text", "label text sizing")
@@ -1650,6 +1689,12 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
 
     args = parser.parse_args(argv)
 
+    # Parse separator color with error handling
+    try:
+        separator_color = parse_color(args.sheet_separator_color)
+    except ValueError as exc:
+        parser.error(str(exc))
+
     config = JobConfig(
         input_path=Path(args.input),
         output_path=None if args.output is None else Path(args.output),
@@ -1670,7 +1715,7 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         draw_border=bool(args.border),
         border_line_width_pt=float(args.border_line_width),
         draw_sheet_separators=bool(args.sheet_separators),
-        sheet_separator_color=_SHEET_SEPARATOR_COLORS[args.sheet_separator_color],
+        sheet_separator_color=separator_color,
         text_height_in=float(args.text_height),
         cap_height_ratio=float(args.cap_height_ratio),
         vertical_labels=bool(args.vertical_labels),
