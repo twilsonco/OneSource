@@ -22,7 +22,15 @@ from pathlib import Path
 
 from fontTools.pens.areaPen import AreaPen
 from fontTools.ttLib import TTFont as FTTTFont
-from reportlab.lib.colors import black
+from reportlab.lib.colors import (
+    black,
+    blue,
+    green,
+    orange,
+    red,
+    yellow,
+)
+from reportlab.lib.colors import HexColor as RLHexColor
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont as RLTTFont
 from reportlab.pdfgen.canvas import Canvas
@@ -100,6 +108,29 @@ COPIES_PER_LABEL: int = 2
 DRAW_BORDER: bool = True
 BORDER_LINE_WIDTH_PT: float = 0.5  # ~0.5pt is the standard "hairline" weight
 
+# Hairline separators drawn at the midpoint of sheet gaps. Set to False to disable.
+DRAW_SHEET_SEPARATORS: bool = True
+
+# Color mapping for sheet separators. Maps short and long names to reportlab colors.
+_SHEET_SEPARATOR_COLORS: dict[str, object] = {
+    "black": black,
+    "k": black,
+    "blue": blue,
+    "b": blue,
+    "green": green,
+    "g": green,
+    "red": red,
+    "r": red,
+    "orange": orange,
+    "o": orange,
+    "yellow": yellow,
+    "y": yellow,
+    "violet": RLHexColor("#8B00FF"),  # violet (not in standard reportlab)
+    "v": RLHexColor("#8B00FF"),
+}
+SHEET_SEPARATOR_COLOR_DEFAULT: str = "blue"
+SHEET_SEPARATOR_COLOR: object = _SHEET_SEPARATOR_COLORS[SHEET_SEPARATOR_COLOR_DEFAULT]
+
 TEXT_HEIGHT_IN: float = 2.0  # cap height of the label text
 
 # Cap-height-to-font-size ratio: Arial Bold reports HHeight = 728/1000 (0.728),
@@ -145,6 +176,8 @@ class JobConfig:
 
     draw_border: bool = DRAW_BORDER
     border_line_width_pt: float = BORDER_LINE_WIDTH_PT
+    draw_sheet_separators: bool = DRAW_SHEET_SEPARATORS
+    sheet_separator_color: object = SHEET_SEPARATOR_COLOR
 
     text_height_in: float = TEXT_HEIGHT_IN
     cap_height_ratio: float = CAP_HEIGHT_RATIO
@@ -258,8 +291,8 @@ def apply_layout_config(config: JobConfig) -> None:
     global LABELS_PER_SHEET_ROW, LABELS_PER_SHEET_COL
     global SHEET_COLS, SHEET_W_IN, SHEET_H_IN, LABELS_PER_SHEET
     global SHEETS_PER_ROW, HORIZONTAL_GAP_IN, VERTICAL_GAP_IN
-    global COPIES_PER_LABEL, DRAW_BORDER, BORDER_LINE_WIDTH_PT
-    global TEXT_HEIGHT_IN, CAP_HEIGHT_RATIO, FONT_SIZE_PT
+    global COPIES_PER_LABEL, DRAW_BORDER, BORDER_LINE_WIDTH_PT, DRAW_SHEET_SEPARATORS
+    global SHEET_SEPARATOR_COLOR, TEXT_HEIGHT_IN, CAP_HEIGHT_RATIO, FONT_SIZE_PT
 
     PAGE_W_IN = config.page_w_in
     PAGE_LEFT_MARGIN_IN = config.page_left_margin_in
@@ -287,6 +320,8 @@ def apply_layout_config(config: JobConfig) -> None:
 
     DRAW_BORDER = config.draw_border
     BORDER_LINE_WIDTH_PT = config.border_line_width_pt
+    DRAW_SHEET_SEPARATORS = config.draw_sheet_separators
+    SHEET_SEPARATOR_COLOR = config.sheet_separator_color
 
     TEXT_HEIGHT_IN = config.text_height_in
     CAP_HEIGHT_RATIO = config.cap_height_ratio
@@ -1177,6 +1212,57 @@ def draw_label_border(c: Canvas, x_in: float, y_in: float) -> None:
     c.restoreState()
 
 
+def draw_sheet_separators(c: Canvas, page_h_in: float) -> None:
+    """Draw hairline separators at the midpoint of sheet gaps.
+
+    Draws vertical separators (in horizontal gaps between sheet columns) and
+    horizontal separators (in vertical gaps between sheet rows). Lines use the
+    same ``BORDER_LINE_WIDTH_PT`` weight as label borders and are drawn in black.
+    """
+    c.saveState()
+    c.setLineWidth(BORDER_LINE_WIDTH_PT)
+    c.setStrokeColor(SHEET_SEPARATOR_COLOR)
+
+    # Vertical separators (in horizontal gaps between sheet columns)
+    if SHEETS_PER_ROW > 1 and HORIZONTAL_GAP_IN > 0:
+        # Draw vertical line at midpoint of each horizontal gap between columns
+        gap_x_in = HORIZONTAL_GAP_IN / 2.0
+        for sheet_col in range(1, SHEETS_PER_ROW):
+            # X coordinate: after sheet_col sheets, into the gap
+            x_in = PAGE_LEFT_MARGIN_IN + sheet_col * SHEET_W_IN + gap_x_in
+            # Draw line top-to-bottom across full page height
+            c.line(x_in * 72.0, 0, x_in * 72.0, page_h_in * 72.0)
+
+    # Horizontal separators (in vertical gaps between sheet rows)
+    if LABELS_PER_SHEET_COL > 0 and VERTICAL_GAP_IN > 0:
+        # Iterate through sheet rows and draw separators at gap midpoints.
+        # Calculate sheet row positions based on page height and geometry.
+        gap_y_in = VERTICAL_GAP_IN / 2.0
+
+        sheet_row = 0
+        while True:
+            # Y position of the top of this sheet row (measured from top of page)
+            sheet_row_top_in = page_h_in - PAGE_TOP_MARGIN_IN - sheet_row * (
+                SHEET_H_IN + VERTICAL_GAP_IN
+            )
+            # Y position of the gap below this sheet (measured from bottom of page)
+            gap_y_in_from_bottom = sheet_row_top_in - SHEET_H_IN - gap_y_in
+            gap_y_pt = gap_y_in_from_bottom * 72.0
+
+            # Stop if gap is below the bottom margin
+            if gap_y_in_from_bottom < PAGE_BOTTOM_MARGIN_IN:
+                break
+
+            # Draw line left-to-right across full page width (edge to edge)
+            x_start_pt = 0
+            x_end_pt = PAGE_W_IN * 72.0
+            c.line(x_start_pt, gap_y_pt, x_end_pt, gap_y_pt)
+
+            sheet_row += 1
+
+    c.restoreState()
+
+
 def draw_label(
     c: Canvas,
     text: str,
@@ -1254,6 +1340,9 @@ def build_pdf(
         if DRAW_BORDER:
             draw_label_border(c, label_x_in, label_y_in)
         draw_label(c, label, label_x_in, label_y_in, font_name, scale_by_text[label])
+
+    if DRAW_SHEET_SEPARATORS:
+        draw_sheet_separators(c, h_in)
 
     c.showPage()
     c.save()
@@ -1460,6 +1549,34 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         default=BORDER_LINE_WIDTH_PT,
         help="Border weight in points.",
     )
+    output.add_argument(
+        "--sheet-separators",
+        action=argparse.BooleanOptionalAction,
+        default=DRAW_SHEET_SEPARATORS,
+        help="Draw hairline separators at the midpoint of sheet gaps.",
+    )
+    output.add_argument(
+        "--sheet-separator-color",
+        type=str,
+        default=SHEET_SEPARATOR_COLOR_DEFAULT,
+        choices=[
+            "black",
+            "k",
+            "blue",
+            "b",
+            "green",
+            "g",
+            "red",
+            "r",
+            "orange",
+            "o",
+            "yellow",
+            "y",
+            "violet",
+            "v",
+        ],
+        help="Color of sheet separator hairlines (default: blue). Accepts long names or single-letter shortcuts.",
+    )
 
     text = parser.add_argument_group("text", "label text sizing")
     text.add_argument(
@@ -1552,6 +1669,8 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         copies_per_label=int(args.copies),
         draw_border=bool(args.border),
         border_line_width_pt=float(args.border_line_width),
+        draw_sheet_separators=bool(args.sheet_separators),
+        sheet_separator_color=_SHEET_SEPARATOR_COLORS[args.sheet_separator_color],
         text_height_in=float(args.text_height),
         cap_height_ratio=float(args.cap_height_ratio),
         vertical_labels=bool(args.vertical_labels),
