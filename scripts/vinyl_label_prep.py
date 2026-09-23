@@ -22,16 +22,7 @@ from pathlib import Path
 
 from fontTools.pens.areaPen import AreaPen
 from fontTools.ttLib import TTFont as FTTTFont
-from reportlab.lib.colors import (
-    black,
-    blue,
-    green,
-    magenta,
-    orange,
-    red,
-    yellow,
-    cyan
-)
+from reportlab.lib.colors import black, blue, green, magenta, orange, red, yellow, cyan
 from reportlab.lib.colors import HexColor as RLHexColor
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont as RLTTFont
@@ -113,6 +104,7 @@ def parse_color(color_str: str) -> object:
     except ValueError as exc:
         raise ValueError(f"Invalid hex color format {color_str}: {exc}") from exc
 
+
 # --- Geometry (inches) --------------------------------------------------------
 
 # These constants are the script's defaults; each one can be overridden from
@@ -183,12 +175,14 @@ VERTICAL_GAP_IN: float = 2.0  # gap between sheet rows (unused when rows are aut
 COPIES_PER_LABEL: int = 2
 
 # Hairline border drawn around each label. Set to False to disable.
+# Labels tile edge-to-edge, so the border is drawn as a de-duplicated grid of
+# edges: an edge shared by two adjacent labels is stroked exactly once.
 DRAW_BORDER: bool = True
 BORDER_LINE_WIDTH_PT: float = 0.5  # ~0.5pt is the standard "hairline" weight
 
 # Hairline separators drawn at the midpoint of sheet gaps. Set to False to disable.
 DRAW_SHEET_SEPARATORS: bool = True
-SHEET_SEPARATOR_COLOR_DEFAULT: str = "cyan"
+SHEET_SEPARATOR_COLOR_DEFAULT: str = "yellow"
 SHEET_SEPARATOR_COLOR: object = parse_color(SHEET_SEPARATOR_COLOR_DEFAULT)
 
 # Text color for labels (default: black).
@@ -361,8 +355,18 @@ def apply_layout_config(config: JobConfig) -> None:
     global LABELS_PER_SHEET_ROW, LABELS_PER_SHEET_COL
     global SHEET_COLS, SHEET_W_IN, SHEET_H_IN, LABELS_PER_SHEET
     global SHEETS_PER_ROW, HORIZONTAL_GAP_IN, VERTICAL_GAP_IN
-    global COPIES_PER_LABEL, DRAW_BORDER, BORDER_LINE_WIDTH_PT, BORDER_COLOR, DRAW_SHEET_SEPARATORS
-    global SHEET_SEPARATOR_COLOR, TEXT_COLOR, TEXT_HEIGHT_IN, CAP_HEIGHT_RATIO, FONT_SIZE_PT
+    global \
+        COPIES_PER_LABEL, \
+        DRAW_BORDER, \
+        BORDER_LINE_WIDTH_PT, \
+        BORDER_COLOR, \
+        DRAW_SHEET_SEPARATORS
+    global \
+        SHEET_SEPARATOR_COLOR, \
+        TEXT_COLOR, \
+        TEXT_HEIGHT_IN, \
+        CAP_HEIGHT_RATIO, \
+        FONT_SIZE_PT
 
     PAGE_W_IN = config.page_w_in
     PAGE_LEFT_MARGIN_IN = config.page_left_margin_in
@@ -1126,17 +1130,13 @@ def write_metrics_report(
     )
 
     # Write text and CSV reports
-    write_per_label_report(
-        per_label, labels_txt_path, include_costs=True
-    )
+    write_per_label_report(per_label, labels_txt_path, include_costs=True)
     write_per_label_report(
         per_label,
         labels_customer_txt_path,
         include_costs=False,
     )
-    write_metrics_report_csv(
-        per_label, csv_path, include_costs=True
-    )
+    write_metrics_report_csv(per_label, csv_path, include_costs=True)
     write_metrics_report_csv(
         per_label,
         csv_customer_path,
@@ -1215,7 +1215,9 @@ def write_per_label_report(
 
         for m in per_label:
             label_code = m.text[:16]
-            unit_price = f"{m.cost_breakdown.unit_price:.2f}" if m.cost_breakdown else ""
+            unit_price = (
+                f"{m.cost_breakdown.unit_price:.2f}" if m.cost_breakdown else ""
+            )
             row = f"{label_code:<16} | {unit_price:>12}"
             lines.append(row)
 
@@ -1302,24 +1304,74 @@ def write_metrics_report_csv(
 
 # --- Drawing ------------------------------------------------------------------
 
+# A border edge: orientation ("v" or "h"), the constant coordinate, and the
+# segment's start/end along the axis. Keys carry coordinates rounded to 1e-6
+# inch so that float drift between a label's far edge (x + FOOT_W_IN) and the
+# neighbouring label's near edge still collapses them into one key.
+_EdgeKey = tuple[str, float, float, float]
 
-def draw_label_border(c: Canvas, x_in: float, y_in: float) -> None:
-    """Draw a hairline border around a single label at the given bottom-left (in inches).
 
-    The border is drawn at the label's on-page footprint, which equals the
-    design size rotated 90° clockwise for vertical labels.
+def _border_edges(
+    positions: list[tuple[float, float]],
+) -> dict[_EdgeKey, tuple[float, float, float, float]]:
+    """Return the unique border edges of every label footprint, keyed for dedup.
+
+    ``positions`` are the labels' bottom-left corners in inches. Each label
+    contributes four edges (left/right verticals, bottom/top horizontals);
+    coincident edges of adjacent labels collapse to a single entry, so shared
+    borders are stroked once instead of twice. Values are the exact
+    ``(x0, y0, x1, y1)`` endpoints in inches for drawing.
     """
+    edges: dict[_EdgeKey, tuple[float, float, float, float]] = {}
+    for x_in, y_in in positions:
+        x1_in = x_in + FOOT_W_IN
+        y1_in = y_in + FOOT_H_IN
+        edges[("v", round(x_in, 6), round(y_in, 6), round(y1_in, 6))] = (
+            x_in,
+            y_in,
+            x_in,
+            y1_in,
+        )
+        edges[("v", round(x1_in, 6), round(y_in, 6), round(y1_in, 6))] = (
+            x1_in,
+            y_in,
+            x1_in,
+            y1_in,
+        )
+        edges[("h", round(y_in, 6), round(x_in, 6), round(x1_in, 6))] = (
+            x_in,
+            y_in,
+            x1_in,
+            y_in,
+        )
+        edges[("h", round(y1_in, 6), round(x_in, 6), round(x1_in, 6))] = (
+            x_in,
+            y1_in,
+            x1_in,
+            y1_in,
+        )
+    return edges
+
+
+def draw_label_borders(c: Canvas, positions: list[tuple[float, float]]) -> None:
+    """Draw the hairline borders of every label footprint (bottom-lefts in inches).
+
+    Borders are drawn at each label's on-page footprint, which equals the
+    design size rotated 90° clockwise for vertical labels. Edges shared by
+    adjacent labels are de-duplicated (see :func:`_border_edges`) and every
+    unique edge is stroked exactly once, in a single path.
+    """
+    edges = _border_edges(positions)
+    if not edges:
+        return
     c.saveState()
     c.setLineWidth(BORDER_LINE_WIDTH_PT)
     c.setStrokeColor(BORDER_COLOR)
-    c.rect(
-        x_in * 72.0,
-        y_in * 72.0,
-        FOOT_W_IN * 72.0,
-        FOOT_H_IN * 72.0,
-        stroke=1,
-        fill=0,
-    )
+    path = c.beginPath()
+    for x0_in, y0_in, x1_in, y1_in in edges.values():
+        path.moveTo(x0_in * 72.0, y0_in * 72.0)
+        path.lineTo(x1_in * 72.0, y1_in * 72.0)
+    c.drawPath(path, stroke=1, fill=0)
     c.restoreState()
 
 
@@ -1353,8 +1405,10 @@ def draw_sheet_separators(c: Canvas, page_h_in: float) -> None:
         sheet_row = 0
         while True:
             # Y position of the top of this sheet row (measured from top of page)
-            sheet_row_top_in = page_h_in - PAGE_TOP_MARGIN_IN - sheet_row * (
-                SHEET_H_IN + VERTICAL_GAP_IN
+            sheet_row_top_in = (
+                page_h_in
+                - PAGE_TOP_MARGIN_IN
+                - sheet_row * (SHEET_H_IN + VERTICAL_GAP_IN)
             )
             # Y position of the gap below this sheet (measured from bottom of page)
             gap_y_in_from_bottom = sheet_row_top_in - SHEET_H_IN - gap_y_in
@@ -1446,10 +1500,13 @@ def build_pdf(
 
     c = Canvas(str(out_path), pagesize=(PAGE_W_IN * 72.0, h_in * 72.0))
 
-    for idx, label in enumerate(instances):
-        label_x_in, label_y_in = label_position_in(idx, h_in)
-        if DRAW_BORDER:
-            draw_label_border(c, label_x_in, label_y_in)
+    positions = [label_position_in(idx, h_in) for idx in range(len(instances))]
+    # Borders are drawn as one de-duplicated grid so edges shared between
+    # adjacent labels receive a single stroke instead of two overlapping ones.
+    if DRAW_BORDER:
+        draw_label_borders(c, positions)
+
+    for label, (label_x_in, label_y_in) in zip(instances, positions):
         draw_label(c, label, label_x_in, label_y_in, font_name, scale_by_text[label])
 
     if DRAW_SHEET_SEPARATORS:
@@ -1652,7 +1709,8 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         "--border",
         action=argparse.BooleanOptionalAction,
         default=DRAW_BORDER,
-        help="Draw a hairline border around each label.",
+        help="Draw a hairline border around each label. Edges shared between "
+        "adjacent labels are drawn once, never doubled.",
     )
     output.add_argument(
         "--border-line-width",

@@ -18,7 +18,8 @@ usage.
 
 ### Layout
 
-- Each label is 8in × 3in with 1/2in margins on all sides; hairline border.
+- Each label is 8in × 3in with 1/2in margins on all sides; hairline border
+  (edges shared between adjacent labels are drawn once, never doubled).
 - Text is 2in tall bold Arial, compressed horizontally if needed.
 - Page is 52in wide with 1in margins on all four sides.
 - Each label is printed twice (`2X`).
