@@ -12,8 +12,10 @@ dependencies = [
 [dependency-groups]
 dev = [
     "mypy>=2.1.0",
+    "pre-commit>=4.6.2",
     "pypdf>=6.14.2",
     "ruff>=0.15.20",
+    "types-openpyxl>=3.1.5.20260827",
     "types-reportlab>=4.5.1.20260521",
 ]
 

@@ -22,6 +22,7 @@ from pathlib import Path
 
 from fontTools.pens.areaPen import AreaPen
 from fontTools.ttLib import TTFont as FTTTFont
+from reportlab.lib.colors import Color
 from reportlab.lib.colors import black, blue, green, magenta, orange, red, yellow, cyan
 from reportlab.lib.colors import HexColor as RLHexColor
 from reportlab.pdfbase import pdfmetrics
@@ -31,7 +32,7 @@ from reportlab.pdfgen.canvas import Canvas
 # --- Color utilities ---------------------------------------------------------
 
 # Preset color names mapping to reportlab colors
-_PRESET_COLORS: dict[str, object] = {
+_PRESET_COLORS: dict[str, Color] = {
     "cyan": cyan,
     "c": cyan,
     "magenta": magenta,
@@ -53,7 +54,7 @@ _PRESET_COLORS: dict[str, object] = {
 }
 
 
-def parse_color(color_str: str) -> object:
+def parse_color(color_str: str) -> Color:
     """Parse a color specification into a reportlab color object.
 
     Accepts:
@@ -185,15 +186,15 @@ BORDER_LINE_WIDTH_PT: float = 0.5  # ~0.5pt is the standard "hairline" weight
 # Hairline separators drawn at the midpoint of sheet gaps. Set to False to disable.
 DRAW_SHEET_SEPARATORS: bool = True
 SHEET_SEPARATOR_COLOR_DEFAULT: str = "yellow"
-SHEET_SEPARATOR_COLOR: object = parse_color(SHEET_SEPARATOR_COLOR_DEFAULT)
+SHEET_SEPARATOR_COLOR: Color = parse_color(SHEET_SEPARATOR_COLOR_DEFAULT)
 
 # Text color for labels (default: black).
 TEXT_COLOR_DEFAULT: str = "black"
-TEXT_COLOR: object = parse_color(TEXT_COLOR_DEFAULT)
+TEXT_COLOR: Color = parse_color(TEXT_COLOR_DEFAULT)
 
 # Border color for labels (default: black).
 BORDER_COLOR_DEFAULT: str = "magenta"
-BORDER_COLOR: object = parse_color(BORDER_COLOR_DEFAULT)
+BORDER_COLOR: Color = parse_color(BORDER_COLOR_DEFAULT)
 
 TEXT_HEIGHT_IN: float = 2.0  # cap height of the label text
 
@@ -240,10 +241,10 @@ class JobConfig:
 
     draw_border: bool = DRAW_BORDER
     border_line_width_pt: float = BORDER_LINE_WIDTH_PT
-    border_color: object = BORDER_COLOR
+    border_color: Color = BORDER_COLOR
     draw_sheet_separators: bool = DRAW_SHEET_SEPARATORS
-    sheet_separator_color: object = SHEET_SEPARATOR_COLOR
-    text_color: object = TEXT_COLOR
+    sheet_separator_color: Color = SHEET_SEPARATOR_COLOR
+    text_color: Color = TEXT_COLOR
 
     text_height_in: float = TEXT_HEIGHT_IN
     cap_height_ratio: float = CAP_HEIGHT_RATIO

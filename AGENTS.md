@@ -12,6 +12,7 @@ This workspace contains utilities for **preparing printing jobs for labels** (e.
 - **Package manager**: [uv](https://docs.astral.sh/uv/)
 - **Linter / formatter**: [ruff](https://docs.astral.sh/ruff/)
 - **Type checker**: [mypy](https://mypy.readthedocs.io/)
+- **Pre-commit hooks**: [pre-commit](https://pre-commit.com/) runs ruff format, ruff check, and mypy on every `git commit` (config: `.pre-commit-config.yaml`).
 
 ## Common Commands
 
@@ -33,6 +34,11 @@ uv add --dev <package>              # dev-only (ruff, mypy, etc. live here)
 uv run ruff check .                 # lint
 uv run ruff format .                # format
 uv run mypy .                       # type-check
+
+# Pre-commit hooks (ruff format + ruff check + mypy)
+uv run pre-commit install           # one-time setup per clone
+uv run pre-commit run --all-files   # run all hooks on every file
+uv run pre-commit run               # run all hooks on staged files
 ```
 
 If `ruff` / `mypy` are not yet declared as dev dependencies, add them:
@@ -60,7 +66,7 @@ uv add --dev ruff mypy
 
 ## Code Style
 
-- **Formatter / linter**: ruff with default rules. Run `uv run ruff format .` before committing.
+- **Formatter / linter**: ruff with default rules. Enforced automatically by the pre-commit hooks (ruff format, then ruff check with `--fix`).
 - **Type hints**: required on all new code. `mypy` runs in strict mode — no `Any` unless justified with a comment.
 - **Naming**: `snake_case` for functions/variables, `PascalCase` for classes, `UPPER_SNAKE` for constants and unit suffixes (`LABEL_W_IN`).
 - **Docstrings**: short module-level docstring stating *what* the script produces and *what* input it expects. Function docstrings only when the name doesn't say it all.
@@ -77,6 +83,18 @@ This is a scripts-first repo — there is no `tests/` directory by design. For n
 ```sh
 uv run python -c "from scripts.vinyl_label_prep import build_page; print(build_page(...))"
 ```
+
+## Workflow: run pre-commit hooks after each change
+
+After each change is **confirmed working** (script runs, output spot-checked), run the pre-commit hooks before moving on or committing:
+
+```sh
+uv run pre-commit run            # staged files (what `git commit` will run)
+# or, when files aren't staged yet:
+uv run pre-commit run --all-files
+```
+
+The hooks run ruff format, ruff check (with `--fix`), and mypy. If a hook modifies files (e.g. reformatting), re-verify the change still works, then re-run the hooks until they pass. Do not leave the repo in a state where `git commit` would fail the hooks.
 
 ## Git
 
