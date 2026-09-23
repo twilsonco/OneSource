@@ -29,8 +29,10 @@ usage.
   top/bottom edges.
 - Sheets are placed in row-major order: sheet 0 top-left, sheet 1 top-right,
   sheet 2 below sheet 0, sheet 3 below sheet 1, and so on. How many sheets fit
-  side-by-side is derived from the page width; the horizontal gap between them
-  absorbs the leftover width.
+  side-by-side is derived from the page width; the leftover width is split
+  evenly between the horizontal gaps (so with 3+ sheets per row the last
+  sheet's right edge lands on the right page margin), and sheet separators
+  sit at each gap's midpoint.
 - Sheet rows stack vertically, separated by `VERTICAL_GAP_IN`.
 - A sheet size of `0` means "auto": `--labels-per-sheet-row 0` (the default)
   makes a single sheet filling the page width with no horizontal gap;

@@ -160,15 +160,17 @@ SHEET_W_IN: float = LABEL_W_IN * SHEET_COLS
 SHEET_H_IN: float = LABEL_H_IN * LABELS_PER_SHEET_COL  # 0 when rows are auto
 LABELS_PER_SHEET: int = SHEET_COLS * LABELS_PER_SHEET_COL  # 0 when rows are auto
 
-# How many sheets fit side-by-side per sheet-row, and the gap between them. With
-# auto columns there is a single sheet across the page, so the gap is 0.
+# How many sheets fit side-by-side per sheet-row, and the gap between adjacent
+# sheets. The leftover width (usable page width minus all sheets) is split
+# evenly among the sheets_per_row - 1 inter-sheet gaps. With auto columns there
+# is a single sheet across the page, so the gap is 0.
 SHEETS_PER_ROW: int = (
     1 if LABELS_PER_SHEET_ROW == 0 else int(_USABLE_PAGE_W_IN // SHEET_W_IN)
 )
 HORIZONTAL_GAP_IN: float = (
     0.0
-    if LABELS_PER_SHEET_ROW == 0
-    else _USABLE_PAGE_W_IN - SHEETS_PER_ROW * SHEET_W_IN
+    if LABELS_PER_SHEET_ROW == 0 or SHEETS_PER_ROW < 2
+    else (_USABLE_PAGE_W_IN - SHEETS_PER_ROW * SHEET_W_IN) / (SHEETS_PER_ROW - 1)
 )
 VERTICAL_GAP_IN: float = 2.0  # gap between sheet rows (unused when rows are auto)
 
@@ -331,10 +333,16 @@ class JobConfig:
 
     @property
     def horizontal_gap_in(self) -> float:
-        """Gap between adjacent sheets in a sheet-row; 0 when columns are auto."""
-        if self.eff_per_sheet_row == 0:
+        """Gap between adjacent sheets in a sheet-row; 0 when columns are auto.
+
+        The leftover width (usable page width minus all sheets) is split evenly
+        among the ``sheets_per_row - 1`` inter-sheet gaps, so the last sheet's
+        right edge lands exactly on the right page margin.
+        """
+        if self.eff_per_sheet_row == 0 or self.sheets_per_row < 2:
             return 0.0
-        return self.usable_page_w_in - self.sheets_per_row * self.sheet_w_in
+        slack_in = self.usable_page_w_in - self.sheets_per_row * self.sheet_w_in
+        return slack_in / (self.sheets_per_row - 1)
 
     @property
     def font_size_pt(self) -> float:
@@ -1389,10 +1397,15 @@ def draw_sheet_separators(c: Canvas, page_h_in: float) -> None:
     # Vertical separators (in horizontal gaps between sheet columns)
     if SHEETS_PER_ROW > 1 and HORIZONTAL_GAP_IN > 0:
         # Draw vertical line at midpoint of each horizontal gap between columns
-        gap_x_in = HORIZONTAL_GAP_IN / 2.0
         for sheet_col in range(1, SHEETS_PER_ROW):
-            # X coordinate: after sheet_col sheets, into the gap
-            x_in = PAGE_LEFT_MARGIN_IN + sheet_col * SHEET_W_IN + gap_x_in
+            # X coordinate: the next sheet's origin, pulled back half a gap.
+            # The full inter-sheet stride (sheet + gap) must be counted here,
+            # or separators drift left into the sheets once 3+ share a row.
+            x_in = (
+                PAGE_LEFT_MARGIN_IN
+                + sheet_col * (SHEET_W_IN + HORIZONTAL_GAP_IN)
+                - HORIZONTAL_GAP_IN / 2.0
+            )
             # Draw line top-to-bottom across full page height
             c.line(x_in * 72.0, 0, x_in * 72.0, page_h_in * 72.0)
 
