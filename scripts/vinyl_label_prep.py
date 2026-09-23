@@ -26,9 +26,11 @@ from reportlab.lib.colors import (
     black,
     blue,
     green,
+    magenta,
     orange,
     red,
     yellow,
+    cyan
 )
 from reportlab.lib.colors import HexColor as RLHexColor
 from reportlab.pdfbase import pdfmetrics
@@ -39,18 +41,22 @@ from reportlab.pdfgen.canvas import Canvas
 
 # Preset color names mapping to reportlab colors
 _PRESET_COLORS: dict[str, object] = {
-    "black": black,
-    "k": black,
-    "blue": blue,
-    "b": blue,
-    "green": green,
-    "g": green,
-    "red": red,
-    "r": red,
-    "orange": orange,
-    "o": orange,
+    "cyan": cyan,
+    "c": cyan,
+    "magenta": magenta,
+    "m": magenta,
     "yellow": yellow,
     "y": yellow,
+    "black": black,
+    "k": black,
+    "red": red,
+    "r": red,
+    "green": green,
+    "g": green,
+    "blue": blue,
+    "b": blue,
+    "orange": orange,
+    "o": orange,
     "violet": RLHexColor("#8B00FF"),  # violet (not in standard reportlab)
     "v": RLHexColor("#8B00FF"),
 }
@@ -60,7 +66,8 @@ def parse_color(color_str: str) -> object:
     """Parse a color specification into a reportlab color object.
 
     Accepts:
-    - Preset names: black, k, blue, b, green, g, red, r, orange, o, yellow, y, violet, v
+    - Preset names: black, k, blue, b, green, g, red, r, orange, o, yellow, y,
+      violet, v, magenta, m
     - RGB format: r,g,b or (r,g,b) where r,g,b are ints in [0,255]
     - Hex format: aabbcc (6 hex digits, no number-sign)
 
@@ -181,7 +188,7 @@ BORDER_LINE_WIDTH_PT: float = 0.5  # ~0.5pt is the standard "hairline" weight
 
 # Hairline separators drawn at the midpoint of sheet gaps. Set to False to disable.
 DRAW_SHEET_SEPARATORS: bool = True
-SHEET_SEPARATOR_COLOR_DEFAULT: str = "blue"
+SHEET_SEPARATOR_COLOR_DEFAULT: str = "cyan"
 SHEET_SEPARATOR_COLOR: object = parse_color(SHEET_SEPARATOR_COLOR_DEFAULT)
 
 # Text color for labels (default: black).
@@ -189,7 +196,7 @@ TEXT_COLOR_DEFAULT: str = "black"
 TEXT_COLOR: object = parse_color(TEXT_COLOR_DEFAULT)
 
 # Border color for labels (default: black).
-BORDER_COLOR_DEFAULT: str = "black"
+BORDER_COLOR_DEFAULT: str = "magenta"
 BORDER_COLOR: object = parse_color(BORDER_COLOR_DEFAULT)
 
 TEXT_HEIGHT_IN: float = 2.0  # cap height of the label text
@@ -1658,7 +1665,7 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         type=str,
         default=BORDER_COLOR_DEFAULT,
         help="Color of label borders (default: black). "
-        "Accepts preset names (black/k, blue/b, green/g, red/r, orange/o, yellow/y, violet/v), "
+        "Accepts preset names (black/k, blue/b, green/g, red/r, orange/o, yellow/y, violet/v, magenta/m), "
         "RGB format (r,g,b) or r,g,b with ints in [0,255], or hex format (aabbcc, 6 hex digits).",
     )
     output.add_argument(
@@ -1672,7 +1679,7 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         type=str,
         default=SHEET_SEPARATOR_COLOR_DEFAULT,
         help="Color of sheet separator hairlines (default: blue). "
-        "Accepts preset names (black/k, blue/b, green/g, red/r, orange/o, yellow/y, violet/v), "
+        "Accepts preset names (black/k, blue/b, green/g, red/r, orange/o, yellow/y, violet/v, magenta/m), "
         "RGB format (r,g,b) or r,g,b with ints in [0,255], or hex format (aabbcc, 6 hex digits).",
     )
 
@@ -1694,7 +1701,7 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         type=str,
         default=TEXT_COLOR_DEFAULT,
         help="Color of label text (default: black). "
-        "Accepts preset names (black/k, blue/b, green/g, red/r, orange/o, yellow/y, violet/v), "
+        "Accepts preset names (black/k, blue/b, green/g, red/r, orange/o, yellow/y, violet/v, magenta/m), "
         "RGB format (r,g,b) or r,g,b with ints in [0,255], or hex format (aabbcc, 6 hex digits).",
     )
 
