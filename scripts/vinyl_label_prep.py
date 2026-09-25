@@ -927,6 +927,17 @@ class GlobalMetrics:
     cost_breakdown: CostBreakdown | None = None
 
 
+@dataclass(frozen=True)
+class PdfMetrics:
+    """Aggregated metrics for a single PDF file (one or more pages)."""
+
+    total_output_labels: int
+    total_characters: int
+    total_ink_area_sq_in: float
+    total_label_material_sq_in: float
+    cost_breakdown: CostBreakdown | None = None
+
+
 def calculate_metrics(
     labels: list[str],
     font_name: str,
@@ -1029,6 +1040,92 @@ def calculate_metrics(
     return per_label, global_metrics
 
 
+def calculate_per_pdf_metrics(
+    per_label: list[LabelMetrics],
+    page_breaks: list[tuple[int, int]],
+    copies_per_label: int,
+) -> list[PdfMetrics]:
+    """Calculate aggregated metrics for each PDF based on page breaks.
+
+    ``page_breaks`` is a list of (start_idx, end_idx) tuples indicating which
+    instances belong to each PDF. For each PDF, aggregate metrics from the
+    per_label data for those instances.
+    """
+    per_pdf_metrics: list[PdfMetrics] = []
+
+    for start_idx, end_idx in page_breaks:
+        total_labels = 0
+        total_chars = 0
+        total_ink_area = 0.0
+        total_label_material = 0.0
+        total_ink_cost = 0.0
+        total_substrate_cost = 0.0
+        total_printer_hours = 0.0
+        total_printer_cost = 0.0
+        total_labor_hours = 0.0
+        total_labor_cost = 0.0
+
+        # Iterate through all instances in this PDF
+        for instance_idx in range(start_idx, end_idx + 1):
+            # Determine which label this instance corresponds to
+            label_idx = instance_idx // copies_per_label
+            if label_idx < len(per_label):
+                metric = per_label[label_idx]
+                total_labels += 1
+                total_chars += metric.char_count
+                total_ink_area += metric.ink_area_sq_in
+                total_label_material += LABEL_W_IN * LABEL_H_IN
+
+                if metric.cost_breakdown:
+                    total_ink_cost += metric.cost_breakdown.ink_cost
+                    total_substrate_cost += metric.cost_breakdown.substrate_cost
+                    total_printer_hours += metric.cost_breakdown.printer_hours
+                    total_printer_cost += metric.cost_breakdown.printer_cost
+                    total_labor_hours += metric.cost_breakdown.labor_hours
+                    total_labor_cost += metric.cost_breakdown.labor_cost
+
+        # Create cost breakdown if any cost data exists
+        pdf_cost = None
+        if total_ink_cost > 0 or total_substrate_cost > 0:
+            pdf_cost = CostBreakdown(
+                ink_cost=total_ink_cost,
+                substrate_cost=total_substrate_cost,
+                printer_hours=total_printer_hours,
+                printer_cost=total_printer_cost,
+                labor_hours=total_labor_hours,
+                labor_cost=total_labor_cost,
+                total_cost=(
+                    total_ink_cost
+                    + total_substrate_cost
+                    + total_printer_cost
+                    + total_labor_cost
+                ),
+                unit_price=(
+                    (
+                        total_ink_cost
+                        + total_substrate_cost
+                        + total_printer_cost
+                        + total_labor_cost
+                    )
+                    / total_labels
+                    if total_labels > 0
+                    else 0.0
+                ),
+            )
+
+        per_pdf_metrics.append(
+            PdfMetrics(
+                total_output_labels=total_labels,
+                total_characters=total_chars,
+                total_ink_area_sq_in=total_ink_area,
+                total_label_material_sq_in=total_label_material,
+                cost_breakdown=pdf_cost,
+            )
+        )
+
+    return per_pdf_metrics
+
+
 # --- Unit conversion ----------------------------------------------------------
 
 SQ_IN_PER_SQ_FT: float = 144.0
@@ -1093,6 +1190,8 @@ def write_metrics_report_json(
     input_path: Path,
     pdf_paths: Path | list[Path],
     timestamp: str,
+    page_breaks: list[tuple[int, int]] | None = None,
+    copies_per_label: int | None = None,
 ) -> None:
     """Write a machine-readable JSON metrics report to ``out_path``.
 
@@ -1105,12 +1204,22 @@ def write_metrics_report_json(
     printed labels per unique label (design) size.
 
     ``pdf_paths`` can be a single Path or a list of Path objects.
+    If ``page_breaks`` and ``copies_per_label`` are provided, also includes
+    per-PDF metrics in the output.
     """
     # Normalize pdf_paths to a list
     if isinstance(pdf_paths, Path):
         pdf_paths_list = [str(pdf_paths)]
     else:
         pdf_paths_list = [str(p) for p in pdf_paths]
+
+    # Calculate per-PDF metrics if page breaks are provided
+    per_pdf_list = None
+    if page_breaks and copies_per_label:
+        per_pdf_metrics = calculate_per_pdf_metrics(
+            per_label, page_breaks, copies_per_label
+        )
+        per_pdf_list = [with_sq_ft(asdict(m)) for m in per_pdf_metrics]
 
     report = {
         "job": {
@@ -1129,6 +1238,11 @@ def write_metrics_report_json(
         "label_sizes": label_sizes_to_json(job_label_sizes(global_metrics)),
         "per_label": [with_sq_ft(asdict(m)) for m in per_label],
     }
+
+    # Add per_pdf metrics if available
+    if per_pdf_list:
+        report["per_pdf"] = per_pdf_list
+
     out_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
 
@@ -1272,7 +1386,14 @@ def write_metrics_report(
     txt_path.write_text("\n".join(lines), encoding="utf-8")
 
     write_metrics_report_json(
-        per_label, global_metrics, json_path, input_path, pdf_paths, timestamp
+        per_label,
+        global_metrics,
+        json_path,
+        input_path,
+        pdf_paths,
+        timestamp,
+        page_breaks=page_breaks,
+        copies_per_label=COPIES_PER_LABEL,
     )
 
     # Write text and CSV reports

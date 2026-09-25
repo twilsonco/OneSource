@@ -43,6 +43,7 @@ from vinyl_label_prep import (  # noqa: E402
     GlobalMetrics,
     LabelMetrics,
     LabelSize,
+    PdfMetrics,
     PricingConfig,
     format_label_size,
     label_sizes_to_json,
@@ -67,9 +68,22 @@ class JobReport:
     label_sizes: Counter[LabelSize]
     per_label: list[LabelMetrics]
     output_pdf_files: list[Path] | None = None  # Multi-PDF support
+    per_pdf_metrics: list[PdfMetrics] | None = None  # Per-PDF metrics
 
 
 # --- Output model --------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PdfFileRecord:
+    """A single PDF file with its aggregated metrics."""
+
+    filename: str
+    total_output_labels: int
+    total_characters: int
+    total_ink_area_sq_in: float
+    total_label_material_sq_in: float
+    cost_breakdown: CostBreakdown | None = None
 
 
 @dataclass(frozen=True)
@@ -257,6 +271,28 @@ def _load_per_label(entries: list[object], path: Path) -> list[LabelMetrics]:
     return labels
 
 
+def _load_per_pdf(entries: list[object], path: Path) -> list[PdfMetrics]:
+    """Build the ``per_pdf`` list from a report's raw entries."""
+    pdfs: list[PdfMetrics] = []
+    for idx, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise SystemExit(f"{path}: 'per_pdf[{idx}]' is not a JSON object")
+        item: dict[str, object] = {str(k): v for k, v in entry.items()}
+        cost_breakdown = _load_cost_breakdown(item)
+        pdfs.append(
+            PdfMetrics(
+                total_output_labels=_as_int(item, "total_output_labels", path),
+                total_characters=_as_int(item, "total_characters", path),
+                total_ink_area_sq_in=_as_float(item, "total_ink_area_sq_in", path),
+                total_label_material_sq_in=_as_float(
+                    item, "total_label_material_sq_in", path
+                ),
+                cost_breakdown=cost_breakdown,
+            )
+        )
+    return pdfs
+
+
 def _load_label_sizes(
     report: dict[str, object],
     job: dict[str, object],
@@ -311,6 +347,14 @@ def load_report(path: Path) -> JobReport:
         raise SystemExit(f"{path}: 'per_label' is not a JSON array")
     per_label = _load_per_label(per_label_raw, path)
 
+    # Load per_pdf metrics if available
+    per_pdf_metrics = None
+    per_pdf_raw = report.get("per_pdf")
+    if per_pdf_raw is not None:
+        if not isinstance(per_pdf_raw, list):
+            raise SystemExit(f"{path}: 'per_pdf' is not a JSON array")
+        per_pdf_metrics = _load_per_pdf(per_pdf_raw, path)
+
     # Parse output_pdf field - can be string (old format) or array (new format)
     output_pdf_files = None
     if "output_pdf" in job:
@@ -332,6 +376,7 @@ def load_report(path: Path) -> JobReport:
         label_sizes=_load_label_sizes(report, job, global_metrics, path),
         per_label=per_label,
         output_pdf_files=output_pdf_files,
+        per_pdf_metrics=per_pdf_metrics,
     )
 
 
@@ -1041,20 +1086,42 @@ def write_consolidated_report(
         )
     lines.append("")
 
-    # FILE BREAKDOWN section - list all unique PDF files
-    all_pdf_files: list[Path] = []
+    # FILE BREAKDOWN section - list all unique PDF files with their metrics
+    all_pdf_records: list[PdfFileRecord] = []
     for report in reports:
-        if report.output_pdf_files:
-            all_pdf_files.extend(report.output_pdf_files)
+        if report.output_pdf_files and report.per_pdf_metrics:
+            # Pair each PDF file with its corresponding metrics
+            for pdf_path, pdf_metric in zip(
+                report.output_pdf_files, report.per_pdf_metrics
+            ):
+                all_pdf_records.append(
+                    PdfFileRecord(
+                        filename=pdf_path.name,
+                        total_output_labels=pdf_metric.total_output_labels,
+                        total_characters=pdf_metric.total_characters,
+                        total_ink_area_sq_in=pdf_metric.total_ink_area_sq_in,
+                        total_label_material_sq_in=pdf_metric.total_label_material_sq_in,
+                        cost_breakdown=pdf_metric.cost_breakdown,
+                    )
+                )
 
-    if all_pdf_files:
-        unique_pdf_files = sorted(set(all_pdf_files), key=lambda p: str(p))
+    if all_pdf_records:
         lines.append(subrule)
         lines.append("FILE BREAKDOWN")
         lines.append(subrule)
-        for pdf_file in unique_pdf_files:
-            lines.append(str(pdf_file))
-        lines.append(f"Total Files: {len(unique_pdf_files)}")
+        lines.append(
+            f"{'Filename':<40} | {'Labels':>6} | {'Substrate (sq ft)':>17} | "
+            f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
+        )
+        lines.append(f"{'-' * 40}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}")
+        for record in sorted(all_pdf_records, key=lambda r: r.filename):
+            lines.append(
+                f"{record.filename:<40} | {record.total_output_labels:>6d} | "
+                f"{sq_ft(record.total_label_material_sq_in):>17.2f} | "
+                f"{record.total_ink_area_sq_in:>11.2f} | "
+                f"{sq_ft(record.total_ink_area_sq_in):>11.2f}"
+            )
+        lines.append(f"Total Files: {len(all_pdf_records)}")
         lines.append("")
 
     lines.append(subrule)
