@@ -664,8 +664,6 @@ def organize_output_paths(base_path: Path, basename: str) -> dict[str, Path]:
         "pdf": pdf_dir / f"{basename}.pdf",
         "txt": report_dir / f"{basename}_report.txt",
         "json": json_dir / f"{basename}_report.json",
-        "txt_labels": report_dir / f"{basename}_labels.txt",
-        "txt_labels_customer": report_dir / f"{basename}_labels_customer.txt",
         "csv_report": csv_dir / f"{basename}_report.csv",
         "csv_report_customer": csv_dir / f"{basename}_report_customer.csv",
     }
@@ -1251,8 +1249,6 @@ def write_metrics_report(
     global_metrics: GlobalMetrics,
     txt_path: Path,
     json_path: Path,
-    labels_txt_path: Path,
-    labels_customer_txt_path: Path,
     csv_path: Path,
     csv_customer_path: Path,
     input_path: Path,
@@ -1262,12 +1258,11 @@ def write_metrics_report(
 ) -> Path:
     """Write a human-readable metrics report to ``txt_path``.
 
-    Also writes a machine-readable JSON sibling report to ``json_path``,
-    per-label reports, and CSV reports to their respective paths.
+    Also writes a machine-readable JSON sibling report to ``json_path``
+    and CSV reports to their respective paths.
     Returns the path of the JSON report.
 
     ``pdf_paths`` should be a list of Path objects (can have one or more items).
-    ``page_breaks`` and ``num_instances`` are used to determine which PDF each label appears in.
     """
     linear_feet = global_metrics.linear_feet
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1396,20 +1391,7 @@ def write_metrics_report(
         copies_per_label=COPIES_PER_LABEL,
     )
 
-    # Write text and CSV reports
-    # Convert pdf_paths to filenames for the File column
-    pdf_filenames = [p.name for p in pdf_paths]
-
-    write_per_label_report_csv(
-        per_label, labels_txt_path, pdf_filenames, page_breaks, include_costs=True
-    )
-    write_per_label_report_csv(
-        per_label,
-        labels_customer_txt_path,
-        pdf_filenames,
-        page_breaks,
-        include_costs=False,
-    )
+    # Write CSV reports
     write_metrics_report_csv(per_label, csv_path, include_costs=True)
     write_metrics_report_csv(
         per_label,
@@ -2357,8 +2339,6 @@ def process_job(
         global_metrics,
         organized_paths["txt"],
         organized_paths["json"],
-        organized_paths["txt_labels"],
-        organized_paths["txt_labels_customer"],
         organized_paths["csv_report"],
         organized_paths["csv_report_customer"],
         config.input_path,
