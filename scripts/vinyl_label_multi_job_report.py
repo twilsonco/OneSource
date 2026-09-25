@@ -66,6 +66,7 @@ class JobReport:
     global_metrics: GlobalMetrics
     label_sizes: Counter[LabelSize]
     per_label: list[LabelMetrics]
+    output_pdf_files: list[Path] | None = None  # Multi-PDF support
 
 
 # --- Output model --------------------------------------------------------------
@@ -310,6 +311,15 @@ def load_report(path: Path) -> JobReport:
         raise SystemExit(f"{path}: 'per_label' is not a JSON array")
     per_label = _load_per_label(per_label_raw, path)
 
+    # Parse output_pdf field - can be string (old format) or array (new format)
+    output_pdf_files = None
+    if "output_pdf" in job:
+        output_pdf_value = job["output_pdf"]
+        if isinstance(output_pdf_value, str):
+            output_pdf_files = [Path(output_pdf_value)]
+        elif isinstance(output_pdf_value, list):
+            output_pdf_files = [Path(p) for p in output_pdf_value if isinstance(p, str)]
+
     return JobReport(
         path=path,
         input_file=_as_str(job, "input_file", path),
@@ -321,6 +331,7 @@ def load_report(path: Path) -> JobReport:
         global_metrics=global_metrics,
         label_sizes=_load_label_sizes(report, job, global_metrics, path),
         per_label=per_label,
+        output_pdf_files=output_pdf_files,
     )
 
 
@@ -1029,21 +1040,39 @@ def write_consolidated_report(
             f"{sq_ft(metrics.total_ink_area_sq_in):>11.2f}"
         )
     lines.append("")
+
+    # FILE BREAKDOWN section - list all unique PDF files
+    all_pdf_files: list[Path] = []
+    for report in reports:
+        if report.output_pdf_files:
+            all_pdf_files.extend(report.output_pdf_files)
+
+    if all_pdf_files:
+        unique_pdf_files = sorted(set(all_pdf_files), key=lambda p: str(p))
+        lines.append(subrule)
+        lines.append("FILE BREAKDOWN")
+        lines.append(subrule)
+        for pdf_file in unique_pdf_files:
+            lines.append(str(pdf_file))
+        lines.append(f"Total Files: {len(unique_pdf_files)}")
+        lines.append("")
+
     lines.append(subrule)
     lines.append("JOB BREAKDOWN")
     lines.append(subrule)
     lines.append(
-        f"{'Input File':<38} | {'Roll':>5} | {'Labels':>6} | {'Lin Ft':>9} | "
+        f"{'Input File':<38} | {'# Files':>7} | {'Roll':>5} | {'Labels':>6} | {'Lin Ft':>9} | "
         f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
     )
     lines.append(
-        f"{'-' * 38}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 9}-+-{'-' * 11}-+-{'-' * 11}"
+        f"{'-' * 38}-+-{'-' * 7}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 9}-+-{'-' * 11}-+-{'-' * 11}"
     )
     for report in reports:
         gm = report.global_metrics
         input_file = display_input_file(report.input_file, directory.parent)
+        num_files = len(report.output_pdf_files) if report.output_pdf_files else 1
         lines.append(
-            f"{input_file:<38} | {report.page_width_in:>5.0f} | "
+            f"{input_file:<38} | {num_files:>7d} | {report.page_width_in:>5.0f} | "
             f"{gm.total_output_labels:>6d} | {gm.linear_feet:>9.2f} | "
             f"{gm.total_ink_area_sq_in:>11.2f} | "
             f"{sq_ft(gm.total_ink_area_sq_in):>11.2f}"

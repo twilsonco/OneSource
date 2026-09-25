@@ -205,6 +205,8 @@ TEXT_HEIGHT_IN: float = 2.0  # cap height of the label text
 CAP_HEIGHT_RATIO: float = 0.728
 FONT_SIZE_PT: float = TEXT_HEIGHT_IN * 72.0 / CAP_HEIGHT_RATIO  # ~197.8pt
 
+SOFT_PAGE_HEIGHT_IN: float = 72.0  # max page height before splitting into multiple PDFs
+
 # --- Configuration ------------------------------------------------------------
 
 
@@ -250,6 +252,7 @@ class JobConfig:
     cap_height_ratio: float = CAP_HEIGHT_RATIO
 
     vertical_labels: bool = VERTICAL_LABELS
+    soft_page_height_in: float = SOFT_PAGE_HEIGHT_IN
     flat_label_price: float | None = None
 
     @property
@@ -722,6 +725,120 @@ def label_position_in(idx: int, page_h_in: float) -> tuple[float, float]:
     )
 
 
+# --- Page break calculation ---------------------------------------------------
+
+
+def calculate_page_breaks(
+    num_instances: int,
+    soft_page_height_in: float,
+    labels_per_sheet_col: int = LABELS_PER_SHEET_COL,
+    sheet_cols: int = SHEET_COLS,
+    labels_per_sheet: int = LABELS_PER_SHEET,
+    sheets_per_row: int = SHEETS_PER_ROW,
+    sheet_h_in: float = SHEET_H_IN,
+    sheet_w_in: float = SHEET_W_IN,
+    foot_h_in: float = FOOT_H_IN,
+    page_top_margin_in: float = PAGE_TOP_MARGIN_IN,
+    page_bottom_margin_in: float = PAGE_BOTTOM_MARGIN_IN,
+    vertical_gap_in: float = VERTICAL_GAP_IN,
+) -> list[tuple[int, int]]:
+    """Calculate page breaks for multi-page PDF splitting.
+
+    Returns a list of (start_idx, end_idx) tuples (inclusive on both ends)
+    representing label ranges per page. If the entire document fits within
+    soft_page_height_in, returns a single range covering all instances.
+
+    Split boundaries respect sheet/row structure:
+    - Auto-row mode (labels_per_sheet_col == 0): splits occur after complete label rows
+    - Fixed-row mode: splits occur after complete sheet-rows
+
+    If exactly 2 pages result, adjusts the split to achieve roughly equal height.
+    """
+    if num_instances == 0:
+        return []
+
+    # Local helper to calculate page height based on instance count
+    def get_page_height(num_inst: int) -> float:
+        if labels_per_sheet_col == 0:
+            # Auto rows: a single vertical sheet; height grows with the label count.
+            n_label_rows = -(-num_inst // sheet_cols)
+            return page_top_margin_in + n_label_rows * foot_h_in + page_bottom_margin_in
+        n_sheets = -(-num_inst // labels_per_sheet)
+        n_sheet_rows = -(-n_sheets // sheets_per_row)
+        return (
+            page_top_margin_in
+            + n_sheet_rows * sheet_h_in
+            + max(0, n_sheet_rows - 1) * vertical_gap_in
+            + page_bottom_margin_in
+        )
+
+    # Generate candidate split points (indices where we could split)
+    # A split point is the index right after a complete row/sheet-row
+    if labels_per_sheet_col == 0:
+        # Auto-row mode: split candidates are multiples of sheet_cols
+        split_candidates: list[int] = [
+            (i + 1) * sheet_cols for i in range(num_instances // sheet_cols)
+        ]
+    else:
+        # Fixed-row mode: split candidates are multiples of labels_per_sheet * sheets_per_row
+        # (one sheet-row contains labels_per_sheet * sheets_per_row instances)
+        sheet_row_size = labels_per_sheet * sheets_per_row
+        split_candidates = [
+            (i + 1) * sheet_row_size for i in range(num_instances // sheet_row_size)
+        ]
+
+    # Build page ranges by checking height independently for each page
+    # Start from the beginning and find where each page should end
+    page_breaks: list[int] = [0]
+    last_good_split = 0
+    candidate_idx = 0
+
+    while candidate_idx < len(split_candidates):
+        split_idx = split_candidates[candidate_idx]
+        if split_idx >= num_instances:
+            break
+
+        # Check the height if we were to end the current page at split_idx
+        page_start = page_breaks[-1]
+        num_on_page = split_idx - page_start
+        h_in = get_page_height(num_on_page)
+
+        if h_in <= soft_page_height_in:
+            # This candidate fits on the current page, remember it as a good option
+            last_good_split = split_idx
+            candidate_idx += 1
+        else:
+            # This candidate exceeds the limit
+            if last_good_split > page_start:
+                # We have a previous good split; use it as the page end
+                page_breaks.append(last_good_split)
+                last_good_split = 0
+                # Don't advance candidate_idx; recheck this split_idx with the new page_start
+            else:
+                # No previous good split exists; include this candidate anyway
+                # (to ensure at least 1 row/sheet per page)
+                page_breaks.append(split_idx)
+                last_good_split = 0
+                candidate_idx += 1
+
+    # If there's a remaining good split, add it as the last page break
+    if last_good_split > page_breaks[-1]:
+        page_breaks.append(last_good_split)
+
+    # Add the end of the document
+    page_breaks.append(num_instances)
+
+    # Remove duplicates and sort
+    page_breaks = sorted(set(page_breaks))
+
+    # Build ranges: (start_idx, end_idx) inclusive
+    ranges: list[tuple[int, int]] = []
+    for i in range(len(page_breaks) - 1):
+        ranges.append((page_breaks[i], page_breaks[i + 1] - 1))
+
+    return ranges
+
+
 # --- Ink area calculation -----------------------------------------------------
 
 # Typical ink fill factor for bold sans-serif glyphs (ink area / bbox area).
@@ -974,7 +1091,7 @@ def write_metrics_report_json(
     global_metrics: GlobalMetrics,
     out_path: Path,
     input_path: Path,
-    pdf_path: Path,
+    pdf_paths: Path | list[Path],
     timestamp: str,
 ) -> None:
     """Write a machine-readable JSON metrics report to ``out_path``.
@@ -986,12 +1103,22 @@ def write_metrics_report_json(
     substrate length along the roll, in feet); every ``*_sq_in`` area also gets
     a derived ``*_sq_ft`` sibling in square feet. A ``label_sizes`` array counts
     printed labels per unique label (design) size.
+
+    ``pdf_paths`` can be a single Path or a list of Path objects.
     """
+    # Normalize pdf_paths to a list
+    if isinstance(pdf_paths, Path):
+        pdf_paths_list = [str(pdf_paths)]
+    else:
+        pdf_paths_list = [str(p) for p in pdf_paths]
+
     report = {
         "job": {
             "generated": timestamp,
             "input_file": str(input_path),
-            "output_pdf": str(pdf_path),
+            "output_pdf": pdf_paths_list
+            if len(pdf_paths_list) > 1
+            else pdf_paths_list[0],
             "page_width_in": PAGE_W_IN,
             "label_width_in": LABEL_W_IN,
             "label_height_in": LABEL_H_IN,
@@ -1015,13 +1142,18 @@ def write_metrics_report(
     csv_path: Path,
     csv_customer_path: Path,
     input_path: Path,
-    pdf_path: Path,
+    pdf_paths: list[Path],
+    page_breaks: list[tuple[int, int]] | None = None,
+    num_instances: int | None = None,
 ) -> Path:
     """Write a human-readable metrics report to ``txt_path``.
 
     Also writes a machine-readable JSON sibling report to ``json_path``,
     per-label reports, and CSV reports to their respective paths.
     Returns the path of the JSON report.
+
+    ``pdf_paths`` should be a list of Path objects (can have one or more items).
+    ``page_breaks`` and ``num_instances`` are used to determine which PDF each label appears in.
     """
     linear_feet = global_metrics.linear_feet
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1034,7 +1166,12 @@ def write_metrics_report(
     lines.append(rule)
     lines.append(f"Generated:        {timestamp}")
     lines.append(f"Input File:       {input_path}")
-    lines.append(f"Output PDF:       {pdf_path}")
+    # Show all PDF files
+    for i, pdf_path in enumerate(pdf_paths):
+        if i == 0:
+            lines.append(f"Output PDF:       {pdf_path}")
+        else:
+            lines.append(f"{'':15}{pdf_path}")
     lines.append("")
     lines.append(subrule)
     lines.append("GLOBAL PRINTING METRICS")
@@ -1135,14 +1272,21 @@ def write_metrics_report(
     txt_path.write_text("\n".join(lines), encoding="utf-8")
 
     write_metrics_report_json(
-        per_label, global_metrics, json_path, input_path, pdf_path, timestamp
+        per_label, global_metrics, json_path, input_path, pdf_paths, timestamp
     )
 
     # Write text and CSV reports
-    write_per_label_report(per_label, labels_txt_path, include_costs=True)
-    write_per_label_report(
+    # Convert pdf_paths to filenames for the File column
+    pdf_filenames = [p.name for p in pdf_paths]
+
+    write_per_label_report_csv(
+        per_label, labels_txt_path, pdf_filenames, page_breaks, include_costs=True
+    )
+    write_per_label_report_csv(
         per_label,
         labels_customer_txt_path,
+        pdf_filenames,
+        page_breaks,
         include_costs=False,
     )
     write_metrics_report_csv(per_label, csv_path, include_costs=True)
@@ -1162,6 +1306,8 @@ def write_per_label_report(
 
     If include_costs is True, includes full cost breakdown (for internal use).
     If False, includes only code and unit price (for customers).
+
+    DEPRECATED: Use write_per_label_report_csv instead.
     """
     if not per_label:
         return
@@ -1170,69 +1316,166 @@ def write_per_label_report(
 
     if include_costs:
         # Internal report: all columns
-        lines.append("-" * 160)
-        header = (
-            f"{'Label Code':<16} | {'Char Count':>5} | {'Scale':>7} | "
-            f"{'Ink (sq in)':>12} | {'Ink (sq ft)':>11} | "
-            f"{'Ink ($)':>10} | {'Substrate ($)':>13} | {'Print Hrs':>9} | "
-            f"{'Print ($)':>10} | {'Labor Hrs':>9} | {'Labor ($)':>10} | "
-            f"{'Total ($)':>10} | {'Unit ($)':>10}"
+        lines.append(
+            f"{'Label Code':<16} | {'Chars':>5} | {'Scale':>8} | {'Ink Area (sq in)':>16} | {'Ink Cost':>10} | {'Total Cost':>10}"
         )
-        lines.append(header)
-        lines.append("-" * 160)
-
+        lines.append(
+            f"{'-' * 16}-+-{'-' * 5}-+-{'-' * 8}-+-{'-' * 18}-+-{'-' * 10}-+-{'-' * 10}"
+        )
         for m in per_label:
-            label_code = m.text[:16]
-            char_count = str(m.char_count)
-            scale = f"{m.horizontal_scale:.3f}"
-            ink_sq_in = f"{m.ink_area_sq_in:.4f}"
-            ink_sq_ft = f"{sq_ft(m.ink_area_sq_in):.4f}"
-
-            if m.cost_breakdown:
-                ink_cost = f"{m.cost_breakdown.ink_cost:.2f}"
-                substrate_cost = f"{m.cost_breakdown.substrate_cost:.2f}"
-                printer_hours = f"{m.cost_breakdown.printer_hours:.2f}"
-                printer_cost = f"{m.cost_breakdown.printer_cost:.2f}"
-                labor_hours = f"{m.cost_breakdown.labor_hours:.2f}"
-                labor_cost = f"{m.cost_breakdown.labor_cost:.2f}"
-                total_cost = f"{m.cost_breakdown.total_cost:.2f}"
-                unit_price = f"{m.cost_breakdown.unit_price:.2f}"
-            else:
-                ink_cost = ""
-                substrate_cost = ""
-                printer_hours = ""
-                printer_cost = ""
-                labor_hours = ""
-                labor_cost = ""
-                total_cost = ""
-                unit_price = ""
-
-            row = (
-                f"{label_code:<16} | {char_count:>5} | {scale:>7} | "
-                f"{ink_sq_in:>12} | {ink_sq_ft:>11} | "
-                f"{ink_cost:>10} | {substrate_cost:>13} | {printer_hours:>9} | "
-                f"{printer_cost:>10} | {labor_hours:>9} | {labor_cost:>10} | "
-                f"{total_cost:>10} | {unit_price:>10}"
+            ink_cost = (
+                f"${m.cost_breakdown.ink_cost:>8.2f}"
+                if m.cost_breakdown
+                else "$      0.00"
             )
-            lines.append(row)
+            total_cost = (
+                f"${m.cost_breakdown.total_cost:>8.2f}"
+                if m.cost_breakdown
+                else "$      0.00"
+            )
+            lines.append(
+                f"{m.text:<16} | {m.char_count:>5d} | {m.horizontal_scale:>8.3f} | {m.ink_area_sq_in:>16.4f} | {ink_cost} | {total_cost}"
+            )
     else:
-        # Customer report: only label code and unit price
-        lines.append("-" * 40)
-        header = f"{'Label Code':<16} | {'Unit Price ($)':>12}"
-        lines.append(header)
-        lines.append("-" * 40)
-
+        # Customer report: code, char count, unit price
+        lines.append(f"{'Label Code':<16} | {'Chars':>5} | {'Unit Price':>10}")
+        lines.append(f"{'-' * 16}-+-{'-' * 5}-+-{'-' * 10}")
         for m in per_label:
-            label_code = m.text[:16]
             unit_price = (
-                f"{m.cost_breakdown.unit_price:.2f}" if m.cost_breakdown else ""
+                f"${m.cost_breakdown.unit_price / m.char_count:>9.2f}"
+                if m.cost_breakdown
+                else "$      0.00"
             )
-            row = f"{label_code:<16} | {unit_price:>12}"
-            lines.append(row)
+            lines.append(f"{m.text:<16} | {m.char_count:>5d} | {unit_price}")
 
-    lines.append("-" * 160 if include_costs else "-" * 40)
+    lines.append("-" * 40)
     lines.append("")
     output_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _get_label_to_pdf_mapping(
+    per_label: list[LabelMetrics],
+    pdf_filenames: list[str],
+    page_breaks: list[tuple[int, int]] | None,
+) -> dict[str, str]:
+    """Return a mapping of label text to PDF filename.
+
+    Determines which PDF file each unique label appears in based on page_breaks.
+    If page_breaks is None, all labels map to the single PDF.
+    """
+    if not page_breaks or len(pdf_filenames) == 1:
+        # Single PDF case
+        return {m.text: pdf_filenames[0] for m in per_label}
+
+    # Build instances order from per_label (same order as labels)
+    instances = []
+    for m in per_label:
+        for _ in range(COPIES_PER_LABEL):
+            instances.append(m.text)
+
+    # Map each unique label to the PDF it first appears in
+    label_to_pdf = {}
+    for m in per_label:
+        if m.text not in label_to_pdf:
+            # Find first occurrence of this label in instances
+            for idx, instance_text in enumerate(instances):
+                if instance_text == m.text:
+                    # Find which page_break range contains this index
+                    for page_num, (start, end) in enumerate(page_breaks):
+                        if start <= idx <= end:
+                            label_to_pdf[m.text] = pdf_filenames[page_num]
+                            break
+                    break
+
+    return label_to_pdf
+
+
+def write_per_label_report_csv(
+    per_label: list[LabelMetrics],
+    output_path: Path,
+    pdf_filenames: list[str],
+    page_breaks: list[tuple[int, int]] | None = None,
+    include_costs: bool = True,
+) -> None:
+    """Write per-label metrics to a CSV file.
+
+    If include_costs is True, includes full cost breakdown (for internal use).
+    If False, includes only code and unit price (for customers).
+    Includes a "File" column showing which PDF each label appears in.
+    """
+    if not per_label:
+        return
+
+    label_to_pdf = _get_label_to_pdf_mapping(per_label, pdf_filenames, page_breaks)
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        if include_costs:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "File",
+                    "Label Code",
+                    "Chars",
+                    "Scale",
+                    "Ink Area (sq in)",
+                    "Ink Area (sq ft)",
+                    "Ink Cost ($)",
+                    "Substrate Cost ($)",
+                    "Printer Cost ($)",
+                    "Labor Cost ($)",
+                    "Total Cost ($)",
+                ],
+            )
+            writer.writeheader()
+            for m in per_label:
+                row = {
+                    "File": label_to_pdf.get(m.text, pdf_filenames[0]),
+                    "Label Code": m.text,
+                    "Chars": m.char_count,
+                    "Scale": f"{m.horizontal_scale:.3f}",
+                    "Ink Area (sq in)": f"{m.ink_area_sq_in:.4f}",
+                    "Ink Area (sq ft)": f"{sq_ft(m.ink_area_sq_in):.4f}",
+                    "Ink Cost ($)": f"{m.cost_breakdown.ink_cost:.2f}"
+                    if m.cost_breakdown
+                    else "0.00",
+                    "Substrate Cost ($)": f"{m.cost_breakdown.substrate_cost:.2f}"
+                    if m.cost_breakdown
+                    else "0.00",
+                    "Printer Cost ($)": f"{m.cost_breakdown.printer_cost:.2f}"
+                    if m.cost_breakdown
+                    else "0.00",
+                    "Labor Cost ($)": f"{m.cost_breakdown.labor_cost:.2f}"
+                    if m.cost_breakdown
+                    else "0.00",
+                    "Total Cost ($)": f"{m.cost_breakdown.total_cost:.2f}"
+                    if m.cost_breakdown
+                    else "0.00",
+                }
+                writer.writerow(row)
+        else:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "File",
+                    "Label Code",
+                    "Chars",
+                    "Unit Price ($)",
+                ],
+            )
+            writer.writeheader()
+            for m in per_label:
+                unit_price = (
+                    (m.cost_breakdown.unit_price / m.char_count)
+                    if m.cost_breakdown and m.char_count > 0
+                    else 0.0
+                )
+                row = {
+                    "File": label_to_pdf.get(m.text, pdf_filenames[0]),
+                    "Label Code": m.text,
+                    "Chars": m.char_count,
+                    "Unit Price ($)": f"{unit_price:.2f}",
+                }
+                writer.writerow(row)
 
 
 def write_metrics_report_csv(
@@ -1496,8 +1739,10 @@ def build_pdf(
     font_path: Path | None = None,
     pricing_config: PricingConfig | None = None,
     flat_label_price: float | None = None,
-) -> int:
-    """Lay out ``labels`` (each printed COPIES_PER_LABEL times) into sheets and write the PDF.
+    page_breaks: list[tuple[int, int]] | None = None,
+    soft_page_height_in: float = SOFT_PAGE_HEIGHT_IN,
+) -> list[Path]:
+    """Lay out ``labels`` (each printed COPIES_PER_LABEL times) into sheets and write PDF(s).
 
     ``per_label`` provides the precomputed horizontal scale for each unique
     label so the PDF and the metrics report agree exactly. ``font_path``
@@ -1505,30 +1750,67 @@ def build_pdf(
     ``pricing_config`` and ``flat_label_price`` are accepted for API consistency
     but not used by this function.
 
-    Returns the number of label instances written.
+    If ``page_breaks`` is None, calculates breaks using ``soft_page_height_in``.
+    When multiple PDFs are created, the output paths are named with suffixes
+    (e.g., out.pdf → out-1.pdf, out-2.pdf, ...).
+
+    Returns a list of Path objects for all created PDFs.
     """
     font_name, _registered_path = _register_bold_font(font_path)
     scale_by_text = {m.text: m.horizontal_scale for m in per_label}
     instances = [lbl for lbl in labels for _ in range(COPIES_PER_LABEL)]
-    h_in = page_height_in(len(instances))
 
-    c = Canvas(str(out_path), pagesize=(PAGE_W_IN * 72.0, h_in * 72.0))
+    if not instances:
+        return []
 
-    positions = [label_position_in(idx, h_in) for idx in range(len(instances))]
-    # Borders are drawn as one de-duplicated grid so edges shared between
-    # adjacent labels receive a single stroke instead of two overlapping ones.
-    if DRAW_BORDER:
-        draw_label_borders(c, positions)
+    # Calculate page breaks if not provided
+    if page_breaks is None:
+        page_breaks = calculate_page_breaks(len(instances), soft_page_height_in)
 
-    for label, (label_x_in, label_y_in) in zip(instances, positions):
-        draw_label(c, label, label_x_in, label_y_in, font_name, scale_by_text[label])
+    # If only one page, use original path; otherwise use numbered paths
+    pdf_paths: list[Path] = []
+    if len(page_breaks) == 1:
+        pdf_paths = [out_path]
+    else:
+        # Insert page number before .pdf extension
+        stem = out_path.stem
+        suffix = out_path.suffix
+        parent = out_path.parent
+        for page_num in range(1, len(page_breaks) + 1):
+            pdf_paths.append(parent / f"{stem}-{page_num}{suffix}")
 
-    if DRAW_SHEET_SEPARATORS:
-        draw_sheet_separators(c, h_in)
+    # Draw each page
+    for page_num, (start_idx, end_idx) in enumerate(page_breaks):
+        page_instances = instances[start_idx : end_idx + 1]
+        page_h_in = page_height_in(len(page_instances))
+        pdf_path = pdf_paths[page_num]
 
-    c.showPage()
-    c.save()
-    return len(instances)
+        c = Canvas(str(pdf_path), pagesize=(PAGE_W_IN * 72.0, page_h_in * 72.0))
+
+        # Compute positions for this page's instances
+        # Note: positions are computed from 0 to len(page_instances)-1
+        positions = [
+            label_position_in(idx, page_h_in) for idx in range(len(page_instances))
+        ]
+
+        # Borders are drawn as one de-duplicated grid
+        if DRAW_BORDER:
+            draw_label_borders(c, positions)
+
+        # Draw labels
+        for label, (label_x_in, label_y_in) in zip(page_instances, positions):
+            draw_label(
+                c, label, label_x_in, label_y_in, font_name, scale_by_text[label]
+            )
+
+        # Draw sheet separators if enabled
+        if DRAW_SHEET_SEPARATORS:
+            draw_sheet_separators(c, page_h_in)
+
+        c.showPage()
+        c.save()
+
+    return pdf_paths
 
 
 # --- CLI ----------------------------------------------------------------------
@@ -1710,6 +1992,13 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         default=VERTICAL_GAP_IN,
         help="Gap between sheet rows.",
     )
+    sheet.add_argument(
+        "--soft-page-height",
+        type=float,
+        default=SOFT_PAGE_HEIGHT_IN,
+        help="Maximum page height (inches) before splitting PDF into multiple files "
+        "(soft limit—a page exceeding this will still be included, but next page starts after it).",
+    )
 
     output = parser.add_argument_group("output", "copies and border")
     output.add_argument(
@@ -1877,6 +2166,7 @@ def parse_args(argv: list[str] | None = None) -> JobConfig:
         text_height_in=float(args.text_height),
         cap_height_ratio=float(args.cap_height_ratio),
         vertical_labels=bool(args.vertical_labels),
+        soft_page_height_in=float(args.soft_page_height),
         flat_label_price=args.flat_label_price,
     )
     _validate_config(parser, config)
@@ -1912,14 +2202,35 @@ def process_job(
     per_label, global_metrics = calculate_metrics(
         labels, font_name, font_path, pricing_config, flat_label_price
     )
-    n = build_pdf(
+
+    # Calculate page breaks upfront for PDF splitting and label reporting
+    num_instances = len(labels) * config.copies_per_label
+    page_breaks = calculate_page_breaks(
+        num_instances,
+        config.soft_page_height_in,
+        labels_per_sheet_col=config.labels_per_sheet_col,
+        sheet_cols=config.sheet_cols,
+        labels_per_sheet=config.sheet_cols * config.labels_per_sheet_col,
+        sheets_per_row=config.sheets_per_row,
+        sheet_h_in=config.sheet_h_in,
+        sheet_w_in=config.sheet_w_in,
+        foot_h_in=config.foot_h_in,
+        page_top_margin_in=config.page_top_margin_in,
+        page_bottom_margin_in=config.page_bottom_margin_in,
+        vertical_gap_in=config.vertical_gap_in,
+    )
+
+    pdf_paths = build_pdf(
         labels,
         out_path,
         per_label,
         config.font_path,
         pricing_config,
         flat_label_price,
+        page_breaks=page_breaks,
+        soft_page_height_in=config.soft_page_height_in,
     )
+    n_instances = len(labels) * config.copies_per_label
     json_report_path = write_metrics_report(
         per_label,
         global_metrics,
@@ -1930,14 +2241,25 @@ def process_job(
         organized_paths["csv_report"],
         organized_paths["csv_report_customer"],
         config.input_path,
-        out_path,
+        pdf_paths,
+        page_breaks=page_breaks,
+        num_instances=num_instances,
     )
-    print(
-        f"Wrote {n} label instances "
-        f"({len(labels)} unique x {COPIES_PER_LABEL}) to {out_path}\n"
-        f"Wrote metrics report to {organized_paths['txt']}\n"
-        f"Wrote JSON metrics report to {json_report_path}"
-    )
+    if len(pdf_paths) == 1:
+        print(
+            f"Wrote {n_instances} label instances "
+            f"({len(labels)} unique x {config.copies_per_label}) to {pdf_paths[0]}\n"
+            f"Wrote metrics report to {organized_paths['txt']}\n"
+            f"Wrote JSON metrics report to {json_report_path}"
+        )
+    else:
+        print(
+            f"Wrote {n_instances} label instances "
+            f"({len(labels)} unique x {config.copies_per_label}) to {len(pdf_paths)} PDFs:\n"
+            + "\n".join(f"  {p}" for p in pdf_paths)
+            + f"\nWrote metrics report to {organized_paths['txt']}\n"
+            f"Wrote JSON metrics report to {json_report_path}"
+        )
 
 
 def main(argv: list[str] | None = None) -> None:
