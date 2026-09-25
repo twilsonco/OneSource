@@ -112,8 +112,8 @@ def parse_color(color_str: str) -> Color:
 # the command line (see :func:`parse_args`).
 
 PAGE_W_IN: float = 52.0
-PAGE_LEFT_MARGIN_IN: float = 1.0
-PAGE_RIGHT_MARGIN_IN: float = 1.0
+PAGE_LEFT_MARGIN_IN: float = 0.0
+PAGE_RIGHT_MARGIN_IN: float = 0.0
 PAGE_TOP_MARGIN_IN: float = 1.0
 PAGE_BOTTOM_MARGIN_IN: float = 1.0
 
