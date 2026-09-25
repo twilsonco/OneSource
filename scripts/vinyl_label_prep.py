@@ -1392,10 +1392,21 @@ def write_metrics_report(
     )
 
     # Write CSV reports
-    write_metrics_report_csv(per_label, csv_path, include_costs=True)
+    # Convert pdf_paths to filenames for the File column
+    pdf_filenames = [p.name for p in pdf_paths]
+
+    write_metrics_report_csv(
+        per_label,
+        csv_path,
+        pdf_filenames,
+        page_breaks,
+        include_costs=True,
+    )
     write_metrics_report_csv(
         per_label,
         csv_customer_path,
+        pdf_filenames,
+        page_breaks,
         include_costs=False,
     )
 
@@ -1582,16 +1593,24 @@ def write_per_label_report_csv(
 
 
 def write_metrics_report_csv(
-    per_label: list[LabelMetrics], output_path: Path, include_costs: bool = True
+    per_label: list[LabelMetrics],
+    output_path: Path,
+    pdf_filenames: list[str],
+    page_breaks: list[tuple[int, int]] | None = None,
+    include_costs: bool = True,
 ) -> None:
     """Write per-label metrics to a CSV file.
 
     If include_costs is True, includes full cost breakdown (for internal use).
     If False, includes only code, character count, and unit price (for customers).
+    Includes a "File" column showing which PDF each label appears in.
     """
+    label_to_pdf = _get_label_to_pdf_mapping(per_label, pdf_filenames, page_breaks)
+
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         if include_costs:
             fieldnames = [
+                "File",
                 "Label Code",
                 "Char Count",
                 "Scale",
@@ -1610,6 +1629,7 @@ def write_metrics_report_csv(
             writer.writeheader()
             for m in per_label:
                 row = {
+                    "File": label_to_pdf.get(m.text, pdf_filenames[0]),
                     "Label Code": m.text,
                     "Char Count": m.char_count,
                     "Scale": f"{m.horizontal_scale:.3f}",
@@ -1644,12 +1664,15 @@ def write_metrics_report_csv(
                     )
                 writer.writerow(row)
         else:
-            # Customer CSV: only code and unit price
-            fieldnames = ["Label Code", "Unit Price ($)"]
+            # Customer CSV: code, unit price, and file
+            fieldnames = ["File", "Label Code", "Unit Price ($)"]
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for m in per_label:
-                row = {"Label Code": m.text}
+                row = {
+                    "File": label_to_pdf.get(m.text, pdf_filenames[0]),
+                    "Label Code": m.text,
+                }
                 if m.cost_breakdown:
                     row["Unit Price ($)"] = f"{m.cost_breakdown.unit_price:.2f}"
                 else:
