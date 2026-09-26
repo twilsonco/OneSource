@@ -83,6 +83,7 @@ class PdfFileRecord:
     total_characters: int
     total_ink_area_sq_in: float
     total_label_material_sq_in: float
+    label_size: str = ""  # Label dimensions as "WxH" format
     cost_breakdown: CostBreakdown | None = None
 
 
@@ -1090,6 +1091,13 @@ def write_consolidated_report(
     all_pdf_records: list[PdfFileRecord] = []
     for report in reports:
         if report.output_pdf_files and report.per_pdf_metrics:
+            # Extract label size from this report (all labels in a job have same size)
+            label_size_str = ""
+            if report.label_sizes:
+                # Get the first (and usually only) label size for this job
+                for size in report.label_sizes.keys():
+                    label_size_str = format_label_size(size)
+                    break
             # Pair each PDF file with its corresponding metrics
             for pdf_path, pdf_metric in zip(
                 report.output_pdf_files, report.per_pdf_metrics
@@ -1101,6 +1109,7 @@ def write_consolidated_report(
                         total_characters=pdf_metric.total_characters,
                         total_ink_area_sq_in=pdf_metric.total_ink_area_sq_in,
                         total_label_material_sq_in=pdf_metric.total_label_material_sq_in,
+                        label_size=label_size_str,
                         cost_breakdown=pdf_metric.cost_breakdown,
                     )
                 )
@@ -1110,13 +1119,15 @@ def write_consolidated_report(
         lines.append("FILE BREAKDOWN")
         lines.append(subrule)
         lines.append(
-            f"{'Filename':<40} | {'Labels':>6} | {'Substrate (sq ft)':>17} | "
+            f"{'Filename':<40} | {'WxH':>5} | {'Labels':>6} | {'Substrate (sq ft)':>17} | "
             f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
         )
-        lines.append(f"{'-' * 40}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}")
+        lines.append(
+            f"{'-' * 40}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}"
+        )
         for record in sorted(all_pdf_records, key=lambda r: r.filename):
             lines.append(
-                f"{record.filename:<40} | {record.total_output_labels:>6d} | "
+                f"{record.filename:<40} | {record.label_size:>5} | {record.total_output_labels:>6d} | "
                 f"{sq_ft(record.total_label_material_sq_in):>17.2f} | "
                 f"{record.total_ink_area_sq_in:>11.2f} | "
                 f"{sq_ft(record.total_ink_area_sq_in):>11.2f}"
@@ -1128,18 +1139,24 @@ def write_consolidated_report(
     lines.append("JOB BREAKDOWN")
     lines.append(subrule)
     lines.append(
-        f"{'Input File':<38} | {'# Files':>7} | {'Roll':>5} | {'Labels':>6} | {'Lin Ft':>9} | "
+        f"{'Input File':<33} | {'WxH':>5} | {'# Files':>7} | {'Roll':>5} | {'Labels':>6} | {'Lin Ft':>9} | "
         f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
     )
     lines.append(
-        f"{'-' * 38}-+-{'-' * 7}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 9}-+-{'-' * 11}-+-{'-' * 11}"
+        f"{'-' * 33}-+-{'-' * 5}-+-{'-' * 7}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 9}-+-{'-' * 11}-+-{'-' * 11}"
     )
     for report in reports:
         gm = report.global_metrics
         input_file = display_input_file(report.input_file, directory.parent)
         num_files = len(report.output_pdf_files) if report.output_pdf_files else 1
+        # Extract label size (all labels in a job have same size)
+        label_size_str = ""
+        if report.label_sizes:
+            for size in report.label_sizes.keys():
+                label_size_str = format_label_size(size)
+                break
         lines.append(
-            f"{input_file:<38} | {num_files:>7d} | {report.page_width_in:>5.0f} | "
+            f"{input_file:<33} | {label_size_str:>5} | {num_files:>7d} | {report.page_width_in:>5.0f} | "
             f"{gm.total_output_labels:>6d} | {gm.linear_feet:>9.2f} | "
             f"{gm.total_ink_area_sq_in:>11.2f} | "
             f"{sq_ft(gm.total_ink_area_sq_in):>11.2f}"

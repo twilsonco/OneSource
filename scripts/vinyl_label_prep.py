@@ -1867,6 +1867,8 @@ def build_pdf(
     flat_label_price: float | None = None,
     page_breaks: list[tuple[int, int]] | None = None,
     soft_page_height_in: float = SOFT_PAGE_HEIGHT_IN,
+    label_w_in: float = LABEL_W_IN,
+    label_h_in: float = LABEL_H_IN,
 ) -> list[Path]:
     """Lay out ``labels`` (each printed COPIES_PER_LABEL times) into sheets and write PDF(s).
 
@@ -1878,7 +1880,8 @@ def build_pdf(
 
     If ``page_breaks`` is None, calculates breaks using ``soft_page_height_in``.
     When multiple PDFs are created, the output paths are named with suffixes
-    (e.g., out.pdf → out-1.pdf, out-2.pdf, ...).
+    including label dimensions and counts (e.g., out_8x3_24-labels.pdf →
+    out_8x3_24-labels-1.pdf, out_8x3_24-labels-2.pdf, ...).
 
     Returns a list of Path objects for all created PDFs.
     """
@@ -1893,23 +1896,36 @@ def build_pdf(
     if page_breaks is None:
         page_breaks = calculate_page_breaks(len(instances), soft_page_height_in)
 
-    # If only one page, use original path; otherwise use numbered paths
+    # Format label dimensions as WxH (remove trailing .0)
+    label_w_str = f"{label_w_in:g}"
+    label_h_str = f"{label_h_in:g}"
+    label_dims = f"{label_w_str}x{label_h_str}"
+
+    # Build PDF paths with label dimensions and label counts
     pdf_paths: list[Path] = []
-    if len(page_breaks) == 1:
-        pdf_paths = [out_path]
-    else:
-        # Insert page number before .pdf extension
-        stem = out_path.stem
-        suffix = out_path.suffix
-        parent = out_path.parent
-        for page_num in range(1, len(page_breaks) + 1):
-            pdf_paths.append(parent / f"{stem}-{page_num}{suffix}")
+    stem = out_path.stem
+    suffix = out_path.suffix
+    parent = out_path.parent
+
+    for page_num, (start_idx, end_idx) in enumerate(page_breaks):
+        label_count = end_idx - start_idx + 1
+        if len(page_breaks) == 1:
+            # Single PDF: use original stem with dimensions and count
+            pdf_paths.append(
+                parent / f"{stem}_{label_dims}_{label_count}-labels{suffix}"
+            )
+        else:
+            # Multiple PDFs: add page number after dimensions and count
+            pdf_paths.append(
+                parent
+                / f"{stem}_{label_dims}_{label_count}-labels-{page_num + 1}{suffix}"
+            )
 
     # Draw each page
     for page_num, (start_idx, end_idx) in enumerate(page_breaks):
         page_instances = instances[start_idx : end_idx + 1]
         page_h_in = page_height_in(len(page_instances))
-        pdf_path = pdf_paths[page_num]
+        pdf_path = pdf_paths[page_num] if page_num < len(pdf_paths) else pdf_paths[0]
 
         c = Canvas(str(pdf_path), pagesize=(PAGE_W_IN * 72.0, page_h_in * 72.0))
 
@@ -2355,6 +2371,8 @@ def process_job(
         flat_label_price,
         page_breaks=page_breaks,
         soft_page_height_in=config.soft_page_height_in,
+        label_w_in=config.label_w_in,
+        label_h_in=config.label_h_in,
     )
     n_instances = len(labels) * config.copies_per_label
     json_report_path = write_metrics_report(
