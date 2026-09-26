@@ -1,16 +1,21 @@
 # Vinyl label layout & job reports
 
-Two scripts form the vinyl label printing pipeline:
+Two tools form the vinyl label printing pipeline:
 
-- [`scripts/vinyl_label_prep.py`](../scripts/vinyl_label_prep.py) — lays out
-  label codes on a wide print page, emits a print-ready PDF plus per-job
-  metrics reports.
-- [`scripts/vinyl_label_multi_job_report.py`](../scripts/vinyl_label_multi_job_report.py) —
+- `generate` ([`src/vinyllabels/generate.py`](../src/vinyllabels/generate.py)) —
+  lays out label codes on a wide print page, emits a print-ready PDF plus
+  per-job metrics reports.
+- `consolidate` ([`src/vinyllabels/consolidate/cli.py`](../src/vinyllabels/consolidate/cli.py)) —
   consolidates the metrics of many jobs into one combined report.
+
+Both are console scripts installed by `uv sync`, and both also run as modules
+(`uv run python -m vinyllabels.generate`,
+`uv run python -m vinyllabels.consolidate.cli`). See
+[`refactor.md`](refactor.md) for how they relate to the scripts they replaced.
 
 ---
 
-## `vinyl_label_prep.py`
+## `generate`
 
 Lays out vinyl labels (8in × 3in) on a 52in-wide print page and emits a
 print-ready PDF, alongside a text report covering material yield and ink
@@ -64,16 +69,16 @@ TUT-4A
 
 ```sh
 # Use the default output path (<input>.pdf next to the input)
-uv run python scripts/vinyl_label_prep.py -i "data/input.txt"
+uv run generate -i "data/input.txt"
 
 # Write to a custom location; sibling *_report.txt / *_report.json are also produced
-uv run python scripts/vinyl_label_prep.py -i input.txt -o out/labels.pdf
+uv run generate -i input.txt -o out/labels.pdf
 
 # Process every file matching a glob (quote it), e.g. one length bucket per file
-uv run python scripts/vinyl_label_prep.py -i "data/output/*6-chars.txt"
+uv run generate -i "data/output/*6-chars.txt"
 
 # Override any layout option; defaults are the values described above
-uv run python scripts/vinyl_label_prep.py -i input.txt \
+uv run generate -i input.txt \
     --label-height 4 --copies 3 --page-width 60 --no-border
 ```
 
@@ -82,7 +87,7 @@ order (`-o/--output` is only allowed when the input matches a single file).
 
 ### Options
 
-`-i/--input` is the only required flag. Every layout constant in the script is
+`-i/--input` is the only required flag. Every layout constant in the tool is
 also an optional flag defaulting to its defined value, e.g. `--page-width`,
 `--page-left-margin` / `--page-right-margin` / `--page-top-margin` /
 `--page-bottom-margin`, `--label-width`, `--label-height`,
@@ -95,7 +100,7 @@ TTF instead of probing for Arial Bold. Run with `-h` for full help.
 
 ### Output
 
-For each run the script writes three files:
+For each run the tool writes:
 
 1. **PDF** — the print-ready label layout, sized to the 52in-wide roll.
    (`--vertical-labels` appends `_vertical` to the PDF name.)
@@ -106,21 +111,23 @@ For each run the script writes three files:
    - Total character count
    - Per-label breakdown table (label code, chars, horizontal scale, ink area)
 3. **`*_report.json`** — the same data in machine-readable form, consumed by
-   `vinyl_label_multi_job_report.py` below.
+   `consolidate` below.
+4. **`*_report.csv` / `*_report_customer.csv`** — the metrics table as CSV, in
+   the internal and the customer column subset.
 
 Ink area is computed via path integration (Green's theorem) over the TrueType
 glyph outlines using `fontTools.pens.areaPen.AreaPen`. If Arial Bold is not
-found on the system, the script falls back to ReportLab's built-in Helvetica
+found on the system, the tool falls back to ReportLab's built-in Helvetica
 and estimates ink area from the natural text bounding box.
 
 ---
 
-## `vinyl_label_multi_job_report.py`
+## `consolidate`
 
 Consolidates the metrics of every `*_report.json` file in a directory (the
-machine-readable reports emitted by `vinyl_label_prep.py`) into one combined
-report covering the total material yield and ink usage across all jobs, in the
-same style as the per-job reports.
+machine-readable reports emitted by `generate`) into one combined report
+covering the total material yield and ink usage across all jobs, in the same
+style as the per-job reports.
 
 Percentages are recomputed from the summed areas (averaging the per-job
 percentages would weight them wrongly), and the linear footage sums each job's
@@ -129,12 +136,11 @@ own roll length, so jobs with different page widths consolidate correctly.
 ### Usage
 
 ```sh
-uv run python scripts/vinyl_label_multi_job_report.py <directory>
-uv run python scripts/vinyl_label_multi_job_report.py <directory> -o out/combined.txt
+uv run consolidate <directory>
+uv run consolidate <directory> -o out/combined.txt
 ```
 
-- `<directory>` — directory containing `*_report.json` files from
-  `vinyl_label_prep.py`.
+- `<directory>` — directory containing `*_report.json` files from `generate`.
 - `-o/--output` — path for the consolidated text report (default:
   `<directory>/vinyl_labels_combined.txt`). A JSON sibling (same name, `.json`
   suffix) is always written next to it.
@@ -162,6 +168,15 @@ The JSON report mirrors the per-job schema (`job` metadata plus `global` and
 `per_label` sections) and adds a `jobs` array carrying each contributing job's
 own totals, so downstream tools can still attribute usage per job.
 
+Alongside the text report, every run writes the breakdown set into
+`Multi-Job Report/` next to the input directory — the per-label listings as
+text and XLSX, and CSV breakdowns by size, job, PDF file, and label code. Each
+comes in an internal version, a customer version (columns gated by the
+`customer_report` switches in `pricing-config.json`), and, where a vendor would
+see it, a cost-free vendor version. Emitted PDFs are also copied into
+`PDF Files for Vendor/` as `1.pdf`, `2.pdf`, … in the same size-then-name order
+the vendor CSVs use.
+
 ### Typical pipeline
 
 ```sh
@@ -170,8 +185,8 @@ uv run python scripts/count_line_lengths.py "data/input/full_label_lists"
 uv run python scripts/split_lines_by_length.py "data/input/full_label_lists" 6,8,11,14,21
 
 # 2. Generate a PDF + reports per length bucket
-uv run python scripts/vinyl_label_prep.py -i "data/input/full_label_lists/output/*.txt"
+uv run generate -i "data/input/full_label_lists/output/*.txt"
 
 # 3. Consolidate all jobs' metrics into one report
-uv run python scripts/vinyl_label_multi_job_report.py "data/input/full_label_lists/output"
+uv run consolidate "data/input/full_label_lists/output"
 ```

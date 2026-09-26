@@ -4,7 +4,16 @@ Guidance for AI coding agents and human contributors working in this repository.
 
 ## Project Overview
 
-This workspace contains utilities for **preparing printing jobs for labels** (e.g. layouts for large industrial label printers). Most work is delivered as **one-off scripts** in `scripts/` that read inputs from `data/` and emit print-ready output (PDF, PostScript, or similar).
+This workspace contains utilities for **preparing printing jobs for labels** (e.g. layouts for large industrial label printers).
+
+The vinyl label pipeline is a real package: **`src/vinyllabels/`**, installed
+editable by `uv sync` and exposed as the **`generate`** and **`consolidate`**
+console tools (`uv run generate`, `uv run consolidate`). It reads inputs from
+`data/` and emits print-ready output (PDF, PostScript, or similar).
+
+Everything else is delivered as **one-off scripts** in `scripts/`. Shared or
+reused logic belongs in `src/vinyllabels/`; a genuinely one-shot job stays a
+standalone script.
 
 ## Environment
 
@@ -19,12 +28,16 @@ This workspace contains utilities for **preparing printing jobs for labels** (e.
 All commands run from the repository root.
 
 ```sh
-# Sync the virtualenv from pyproject.toml / uv.lock
+# Sync the virtualenv from pyproject.toml / uv.lock (also installs the package)
 uv sync
+
+# Run the vinyl label tools (console scripts from pyproject.toml)
+uv run generate -i data/input.txt
+uv run consolidate data/json
+uv run python -m vinyllabels.generate        # module form, same thing
 
 # Run a one-off script
 uv run python scripts/<name>.py
-uv run python -m scripts.<name>     # if the script has a module wrapper
 
 # Add a dependency (prefer this over hand-editing pyproject.toml)
 uv add <package>
@@ -50,6 +63,7 @@ uv add --dev ruff mypy
 ## Conventions for Scripts
 
 - **One-off scripts** belong in `scripts/`. Give each a descriptive filename (e.g. `vinyl_label_prep.py`, not `script1.py`).
+- **Shared logic** belongs in `src/vinyllabels/`. When logic gets reused, move it into the package instead of copy-pasting it; new modules go under the subpackage that owns the concern (`reportio/` for report writing, `consolidate/` for multi-job work).
 - **Inputs** live in `data/` (e.g. `2027-7-2 labels.txt`). Read them with `pathlib.Path`, never hard-code absolute paths.
 - **Output** (PDF, PS, etc.) should be written to a predictable location — usually a sibling of the input, or a dedicated `out/` folder created on demand.
 - Keep scripts **standalone and re-runnable**: parse CLI args with `argparse` or `sys.argv`, and accept input/output paths as flags rather than baking them in.
@@ -78,11 +92,17 @@ uv add --dev ruff mypy
 
 ## Testing
 
-This is a scripts-first repo — there is no `tests/` directory by design. For non-trivial scripts, add a small `if __name__ == "__main__"` block or a `def main()` that can be exercised manually, and keep the logic in pure functions so it's easy to spot-check from a REPL:
+This is a scripts-first repo — there is no `tests/` directory by design. Keep logic in pure functions so it is easy to spot-check from a REPL, and give every script a `def main()` (plus an `if __name__ == "__main__"` block) that can be exercised manually:
 
 ```sh
-uv run python -c "from scripts.vinyl_label_prep import build_page; print(build_page(...))"
+uv run python -c "from vinyllabels.layout import JobConfig; print(JobConfig(input_path=__import__('pathlib').Path('.')))"
 ```
+
+For anything that changes report output, verify by **differential testing**
+rather than by eye: copy `data/` to two temp directories, run the pre-change
+code against one and your change against the other with the same
+`--pricing-config`, then `diff -r`. Ignore timestamp lines, echoed input paths,
+and PDF creation dates; everything else should match byte-for-byte.
 
 ## Workflow: run pre-commit hooks after each change
 
