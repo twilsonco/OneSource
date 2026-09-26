@@ -457,6 +457,7 @@ def organize_output_paths(input_directory: Path, basename: str) -> dict[str, Pat
         "csv_size_breakdown": csv_dir / f"{basename}_size_breakdown.csv",
         "csv_size_breakdown_customer": csv_dir
         / f"{basename}_size_breakdown_customer.csv",
+        "csv_vendor_size_breakdown": csv_dir / f"{basename}_vendor_size_breakdown.csv",
         "csv_job_breakdown": csv_dir / f"{basename}_job_breakdown.csv",
         "csv_job_breakdown_customer": csv_dir
         / f"{basename}_job_breakdown_customer.csv",
@@ -2109,6 +2110,83 @@ def write_size_breakdown_csv(
             writer.writerow(total_row)
 
 
+def write_vendor_label_size_breakdown_csv(
+    sizes: Counter[LabelSize],
+    size_areas: dict[LabelSize, SizeAreas],
+    reports: list[JobReport],
+    output_path: Path,
+) -> None:
+    """Write vendor label size breakdown to a CSV file.
+
+    Contains the same columns as the VENDOR LABEL SIZE BREAKDOWN text section:
+    Label Size (WxH), Jobs, Files, Labels, Substrate (sq ft), Label Area (sq ft), Ink (sq ft)
+    """
+    # Build jobs_per_size and files_per_size counters
+    jobs_per_size: Counter[LabelSize] = Counter()
+    files_per_size: Counter[LabelSize] = Counter()
+    for report in reports:
+        jobs_per_size.update(report.label_sizes.keys())
+        num_files = len(report.output_pdf_files) if report.output_pdf_files else 1
+        for size in report.label_sizes.keys():
+            files_per_size[size] += num_files
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        fieldnames = [
+            "Label Size (WxH)",
+            "Jobs",
+            "Files",
+            "Labels",
+            "Substrate (sq ft)",
+            "Label Area (sq ft)",
+            "Ink (sq ft)",
+        ]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        # Accumulators for TOTAL row
+        total_jobs = len(reports)
+        total_files = sum(files_per_size.values())
+        total_labels = 0
+        total_substrate_sqft = 0.0
+        total_label_area_sqft = 0.0
+        total_ink_sqft = 0.0
+
+        for size, count in sorted(sizes.items()):
+            area = size_areas[size]
+            substrate_sqft = sq_ft(area.substrate_sq_in)
+            label_area_sqft = sq_ft(area.label_material_sq_in)
+            ink_sqft = sq_ft(area.ink_area_sq_in)
+
+            row = {
+                "Label Size (WxH)": format_label_size(size),
+                "Jobs": jobs_per_size.get(size, 0),
+                "Files": files_per_size.get(size, 0),
+                "Labels": count,
+                "Substrate (sq ft)": f"{substrate_sqft:.2f}",
+                "Label Area (sq ft)": f"{label_area_sqft:.2f}",
+                "Ink (sq ft)": f"{ink_sqft:.2f}",
+            }
+            # Accumulate numeric values
+            total_labels += count
+            total_substrate_sqft += substrate_sqft
+            total_label_area_sqft += label_area_sqft
+            total_ink_sqft += ink_sqft
+
+            writer.writerow(row)
+
+        # Write TOTAL row
+        total_row = {
+            "Label Size (WxH)": "TOTAL",
+            "Jobs": total_jobs,
+            "Files": total_files,
+            "Labels": total_labels,
+            "Substrate (sq ft)": f"{total_substrate_sqft:.2f}",
+            "Label Area (sq ft)": f"{total_label_area_sqft:.2f}",
+            "Ink (sq ft)": f"{total_ink_sqft:.2f}",
+        }
+        writer.writerow(total_row)
+
+
 def write_job_breakdown_csv(
     reports: list[JobReport],
     directory: Path,
@@ -3358,6 +3436,12 @@ def main(argv: list[str] | None = None) -> None:
         customer_report_config=pricing_config.customer_report
         if pricing_config
         else None,
+    )
+    write_vendor_label_size_breakdown_csv(
+        sizes,
+        size_areas,
+        reports,
+        organized_paths["csv_vendor_size_breakdown"],
     )
     write_job_breakdown_csv(
         reports,
