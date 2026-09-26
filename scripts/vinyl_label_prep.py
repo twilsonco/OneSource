@@ -1978,7 +1978,7 @@ def build_pdf(
             # Multiple PDFs: add part number before label count for proper alphabetical sorting
             pdf_paths.append(
                 parent
-                / f"{stem}_{label_dims}_part-{page_num + 1}_{label_count}-labels{suffix}"
+                / f"{stem}_{label_dims}_part-{page_num + 1:03}_{label_count}-labels{suffix}"
             )
 
     # Draw each page
