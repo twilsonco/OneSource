@@ -1915,10 +1915,10 @@ def build_pdf(
                 parent / f"{stem}_{label_dims}_{label_count}-labels{suffix}"
             )
         else:
-            # Multiple PDFs: add page number after dimensions and count
+            # Multiple PDFs: add part number before label count for proper alphabetical sorting
             pdf_paths.append(
                 parent
-                / f"{stem}_{label_dims}_{label_count}-labels-{page_num + 1}{suffix}"
+                / f"{stem}_{label_dims}_part-{page_num + 1}_{label_count}-labels{suffix}"
             )
 
     # Draw each page
