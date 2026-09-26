@@ -1160,15 +1160,15 @@ def write_consolidated_report(
             (len(record.filename) for record in all_pdf_records), default=80
         )
         lines.append(
-            f"{'Filename':<{max_filename_len}} | {'WxH':>5} | {'Labels':>6} | {'Substrate (sq ft)':>17} | "
+            f"{'Filename':<{max_filename_len}} | {'Label WxH':>9} | {'Labels':>6} | {'Substrate (sq ft)':>17} | "
             f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
         )
         lines.append(
-            f"{'-' * max_filename_len}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}"
+            f"{'-' * max_filename_len}-+-{'-' * 9}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}"
         )
         for record in sorted(all_pdf_records, key=lambda r: r.filename):
             lines.append(
-                f"{record.filename:<{max_filename_len}} | {record.label_size:>5} | {record.total_output_labels:>6d} | "
+                f"{record.filename:<{max_filename_len}} | {record.label_size:>9} | {record.total_output_labels:>6d} | "
                 f"{sq_ft(record.total_label_material_sq_in):>17.2f} | "
                 f"{record.total_ink_area_sq_in:>11.2f} | "
                 f"{sq_ft(record.total_ink_area_sq_in):>11.2f}"
