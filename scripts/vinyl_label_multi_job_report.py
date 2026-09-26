@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
 import sys
 from collections import Counter
 from dataclasses import asdict, dataclass
@@ -426,6 +427,8 @@ def organize_output_paths(input_directory: Path, basename: str) -> dict[str, Pat
       - txt files (main directory)
       - csv/ (subdirectory for CSV reports)
       - json/ (subdirectory for JSON reports)
+    - PDF Files for Vendor/
+      - Simplified PDF files renamed by file number
 
     Returns a dict mapping output type to output path, creating directories if needed.
     """
@@ -433,9 +436,10 @@ def organize_output_paths(input_directory: Path, basename: str) -> dict[str, Pat
     output_root = input_directory.parent / "Multi-Job Report"
     csv_dir = output_root / "csv"
     json_dir = output_root / "json"
+    pdf_vendor_dir = input_directory.parent / "PDF Files for Vendor"
 
     # Create directories if they don't exist
-    for d in [output_root, csv_dir, json_dir]:
+    for d in [output_root, csv_dir, json_dir, pdf_vendor_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
     return {
@@ -454,9 +458,11 @@ def organize_output_paths(input_directory: Path, basename: str) -> dict[str, Pat
         "csv_file_breakdown": csv_dir / f"{basename}_file_breakdown.csv",
         "csv_file_breakdown_customer": csv_dir
         / f"{basename}_file_breakdown_customer.csv",
+        "csv_file_breakdown_vendor": csv_dir / f"{basename}_file_breakdown_vendor.csv",
         "csv_label_breakdown": csv_dir / f"{basename}_label_breakdown.csv",
         "csv_label_breakdown_customer": csv_dir
         / f"{basename}_label_breakdown_customer.csv",
+        "pdf_files_vendor": pdf_vendor_dir,
     }
 
 
@@ -1161,58 +1167,58 @@ def write_consolidated_report(
     lines.append("")
 
     # FILE BREAKDOWN section - list all unique PDF files with their metrics
-    all_pdf_records: list[PdfFileRecord] = []
-    for report in reports:
-        if report.output_pdf_files and report.per_pdf_metrics:
-            # Extract label size from this report (all labels in a job have same size)
-            label_size_str = ""
-            if report.label_sizes:
-                # Get the first (and usually only) label size for this job
-                for size in report.label_sizes.keys():
-                    label_size_str = format_label_size(size)
-                    break
-            # Pair each PDF file with its corresponding metrics
-            for pdf_path, pdf_metric in zip(
-                report.output_pdf_files, report.per_pdf_metrics
-            ):
-                all_pdf_records.append(
-                    PdfFileRecord(
-                        filename=pdf_path.name,
-                        total_output_labels=pdf_metric.total_output_labels,
-                        total_characters=pdf_metric.total_characters,
-                        total_ink_area_sq_in=pdf_metric.total_ink_area_sq_in,
-                        total_label_material_sq_in=pdf_metric.total_label_material_sq_in,
-                        label_size=label_size_str,
-                        cost_breakdown=pdf_metric.cost_breakdown,
-                    )
-                )
-
     # Build PDF file records using helper function
     all_pdf_records = build_pdf_file_records(reports)
 
     if all_pdf_records:
+        # Sort by label size first, then filename for vendor-friendly ordering
+        sorted_records = sorted(
+            all_pdf_records, key=lambda r: (r.label_size, r.filename)
+        )
+
         lines.append(subrule)
         lines.append("FILE BREAKDOWN")
         lines.append(subrule)
         # Get max filename length for formatting
         max_filename_len = max(
-            (len(record.filename) for record in all_pdf_records), default=80
+            (len(record.filename) for record in sorted_records), default=80
         )
         lines.append(
-            f"{'Filename':<{max_filename_len}} | {'Label WxH':>9} | {'Labels':>6} | {'Substrate (sq ft)':>17} | "
+            f"{'File #':>6} | {'Filename':<{max_filename_len}} | {'Label WxH':>9} | {'Labels':>6} | {'Substrate (sq ft)':>17} | "
             f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
         )
         lines.append(
-            f"{'-' * max_filename_len}-+-{'-' * 9}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}"
+            f"{'-' * 6}-+-{'-' * max_filename_len}-+-{'-' * 9}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}"
         )
-        for record in sorted(all_pdf_records, key=lambda r: r.filename):
+        for file_num, record in enumerate(sorted_records, start=1):
             lines.append(
-                f"{record.filename:<{max_filename_len}} | {record.label_size:>9} | {record.total_output_labels:>6d} | "
+                f"{file_num:>6d} | {record.filename:<{max_filename_len}} | {record.label_size:>9} | {record.total_output_labels:>6d} | "
                 f"{sq_ft(record.total_label_material_sq_in):>17.2f} | "
                 f"{record.total_ink_area_sq_in:>11.2f} | "
                 f"{sq_ft(record.total_ink_area_sq_in):>11.2f}"
             )
-        lines.append(f"Total Files: {len(all_pdf_records)}")
+        lines.append(f"Total Files: {len(sorted_records)}")
+        lines.append("")
+
+        # FILE BREAKDOWN VENDOR section - same as FILE BREAKDOWN but without Filename
+        lines.append(subrule)
+        lines.append("FILE BREAKDOWN VENDOR")
+        lines.append(subrule)
+        lines.append(
+            f"{'File #':>6} | {'Label WxH':>9} | {'Labels':>6} | {'Substrate (sq ft)':>17} | "
+            f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
+        )
+        lines.append(
+            f"{'-' * 6}-+-{'-' * 9}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}"
+        )
+        for file_num, record in enumerate(sorted_records, start=1):
+            lines.append(
+                f"{file_num:>6d} | {record.label_size:>9} | {record.total_output_labels:>6d} | "
+                f"{sq_ft(record.total_label_material_sq_in):>17.2f} | "
+                f"{record.total_ink_area_sq_in:>11.2f} | "
+                f"{sq_ft(record.total_ink_area_sq_in):>11.2f}"
+            )
+        lines.append(f"Total Files: {len(sorted_records)}")
         lines.append("")
 
     lines.append(subrule)
@@ -2561,6 +2567,72 @@ def write_pdf_file_breakdown_csv(
             writer.writerow(total_row)
 
 
+def write_pdf_file_breakdown_vendor_csv(
+    pdf_records: list[PdfFileRecord],
+    output_path: Path,
+) -> None:
+    """Write vendor-friendly PDF file breakdown to a CSV file.
+
+    Includes file number (sequential), label dimensions, labels count,
+    substrate and ink metrics. No filename or price columns for vendor simplicity.
+    Records are sorted by (label_size, filename) for consistent ordering.
+    """
+    if not pdf_records:
+        return
+
+    # Sort by label size first, then filename
+    sorted_records = sorted(pdf_records, key=lambda r: (r.label_size, r.filename))
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        fieldnames = [
+            "File #",
+            "Label Size (WxH)",
+            "Labels",
+            "Substrate (sq ft)",
+            "Ink (sq in)",
+            "Ink (sq ft)",
+        ]
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+
+        total_substrate = 0.0
+        total_ink_sq_in = 0.0
+        total_ink_sq_ft = 0.0
+        total_labels = 0
+
+        for file_num, record in enumerate(sorted_records, start=1):
+            substrate_sq_ft = sq_ft(record.total_label_material_sq_in)
+            ink_sq_ft = sq_ft(record.total_ink_area_sq_in)
+
+            writer.writerow(
+                {
+                    "File #": file_num,
+                    "Label Size (WxH)": record.label_size,
+                    "Labels": record.total_output_labels,
+                    "Substrate (sq ft)": f"{substrate_sq_ft:.2f}",
+                    "Ink (sq in)": f"{record.total_ink_area_sq_in:.2f}",
+                    "Ink (sq ft)": f"{ink_sq_ft:.2f}",
+                }
+            )
+
+            total_substrate += substrate_sq_ft
+            total_ink_sq_in += record.total_ink_area_sq_in
+            total_ink_sq_ft += ink_sq_ft
+            total_labels += record.total_output_labels
+
+        # Write totals row
+        writer.writerow(
+            {
+                "File #": "",
+                "Label Size (WxH)": "TOTAL",
+                "Labels": total_labels,
+                "Substrate (sq ft)": f"{total_substrate:.2f}",
+                "Ink (sq in)": f"{total_ink_sq_in:.2f}",
+                "Ink (sq ft)": f"{total_ink_sq_ft:.2f}",
+            }
+        )
+
+
 def write_per_label_breakdown_csv(
     labels: list[ConsolidatedLabelBySize],
     output_path: Path,
@@ -3160,6 +3232,31 @@ def main(argv: list[str] | None = None) -> None:
         if pricing_config
         else None,
     )
+    write_pdf_file_breakdown_vendor_csv(
+        pdf_records,
+        organized_paths["csv_file_breakdown_vendor"],
+    )
+
+    # Copy PDF files to vendor directory with simplified numbering
+    if pdf_records:
+        # Sort by label size first, then filename (same as vendor report)
+        sorted_records = sorted(pdf_records, key=lambda r: (r.label_size, r.filename))
+        # Find all PDF files across all reports and create mapping
+        pdf_path_map: dict[str, Path] = {}
+        for report in reports:
+            if report.output_pdf_files:
+                for pdf_file in report.output_pdf_files:
+                    pdf_path_map[pdf_file.name] = pdf_file
+        # Copy files with new names
+        vendor_dir = organized_paths["pdf_files_vendor"]
+        for file_num, record in enumerate(sorted_records, start=1):
+            src_path = pdf_path_map.get(record.filename)
+            if src_path and src_path.exists():
+                dst_path = vendor_dir / f"{file_num}.pdf"
+                try:
+                    shutil.copy2(src_path, dst_path)
+                except OSError as e:
+                    print(f"Warning: Could not copy {src_path} to {dst_path}: {e}")
 
     write_per_label_breakdown_csv(
         labels_by_size,
