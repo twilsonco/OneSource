@@ -25,6 +25,8 @@ dev = [
     "mypy>=2.1.0",
     "pre-commit>=4.6.2",
     "pypdf>=6.14.2",
+    "pytest-cov>=7.1.0",
+    "pytest>=9.1.1",
     "ruff>=0.15.20",
     "types-openpyxl>=3.1.5.20260827",
     "types-reportlab>=4.5.1.20260521",
@@ -32,6 +34,26 @@ dev = [
 
 [tool.ruff]
 src = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["vinyllabels"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "pragma: no cover",
+    "@overload",
+    "assert_never",
+    'if __name__ == "__main__":',
+]
 
 [tool.mypy]
 strict = true

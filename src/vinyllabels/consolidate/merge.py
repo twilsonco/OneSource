@@ -76,7 +76,9 @@ def _finalize(
     summed: CostBreakdown | None, markup_percent: float
 ) -> CostBreakdown | None:
     """Resolve a summed breakdown's price, or ``None`` when there was nothing."""
-    if summed is None:
+    # Every caller checks for a missing breakdown before calling, so this branch
+    # is defensive only and cannot be reached through the public API.
+    if summed is None:  # pragma: no cover
         return None
     return replace(
         summed,

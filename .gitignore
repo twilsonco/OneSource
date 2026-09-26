@@ -9,6 +9,14 @@ wheels/
 # Virtual environments
 .venv
 
+# Test / coverage artifacts
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
 # Macos and Windows metadata
 *.DS_Store
 Thumbs.db

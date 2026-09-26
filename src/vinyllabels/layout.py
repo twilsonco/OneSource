@@ -87,7 +87,7 @@ TEXT_HEIGHT_IN: float = 2.0  # cap height of the label text
 # with Helvetica it lands at ~2.01in.
 CAP_HEIGHT_RATIO: float = 0.728
 
-SOFT_PAGE_HEIGHT_IN: float = 72.0  # max page height before splitting into PDFs
+SOFT_PAGE_HEIGHT_IN: float = 80.0  # max page height before splitting into PDFs
 
 
 def resolve_sheet_cols(
@@ -400,6 +400,10 @@ def page_breaks(
 
     Split boundaries respect sheet/row structure: with auto rows splits occur
     after complete label rows, and with fixed rows after complete sheet-rows.
+    The end of the document is always a candidate too, so a page is only closed
+    when the *whole* remainder stops fitting. Without it a count landing exactly
+    on a row boundary has no candidate after it, and the trailing rows would
+    split into separate PDFs even though they fitted together.
     """
     if num_instances == 0:
         return []
@@ -416,11 +420,12 @@ def page_breaks(
     else:
         # One sheet-row holds labels_per_sheet * sheets_per_row instances.
         stride = config.labels_per_sheet * config.sheets_per_row
-    split_candidates = [
+    interior_splits = [
         (i + 1) * stride
         for i in range(num_instances // stride)
         if (i + 1) * stride < num_instances
     ]
+    split_candidates = [*interior_splits, num_instances]
 
     # Greedily extend the current page while the next candidate still fits.
     breaks: list[int] = [0]

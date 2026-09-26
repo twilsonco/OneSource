@@ -1,4 +1,4 @@
-# Pre-commit hooks: ruff format, ruff lint, mypy type-check.
+# Pre-commit hooks: ruff format, ruff lint, mypy type-check, then the test suite.
 # Hooks shell out to `uv run` so they use the exact toolchain pinned in
 # pyproject.toml / uv.lock. Install once with: uv run pre-commit install
 repos:
@@ -21,6 +21,14 @@ repos:
       - id: mypy
         name: mypy
         entry: uv run mypy .
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+        pass_filenames: false
+
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
         language: system
         types_or: [python, pyi]
         require_serial: true
