@@ -1003,21 +1003,26 @@ def write_consolidated_report(
     lines.append("LABEL SIZE BREAKDOWN")
     lines.append(subrule)
     jobs_per_size: Counter[LabelSize] = Counter()
+    files_per_size: Counter[LabelSize] = Counter()
     for report in reports:
         jobs_per_size.update(report.label_sizes.keys())
+        # Count PDF files per size
+        num_files = len(report.output_pdf_files) if report.output_pdf_files else 1
+        for size in report.label_sizes.keys():
+            files_per_size[size] += num_files
 
     # Check if any size_areas has cost_breakdown to decide on table format
     has_costs = any(sa.cost_breakdown is not None for sa in size_areas.values())
 
     if has_costs:
         lines.append(
-            f"{'Label Size (WxH)':<16} | {'Jobs':>4} | {'Labels':>6} | "
+            f"{'Label Size (WxH)':<16} | {'Jobs':>4} | {'Files':>5} | {'Labels':>6} | "
             f"{'Substrate (sq ft)':>17} | {'Label Area (sq ft)':>18} | {'Ink (sq ft)':>11} | "
             f"{'Substrate Cost':>14} | {'Ink Cost':>10} | {'Printer Cost':>12} | "
             f"{'Labor Cost':>10} | {'Total Cost':>10}"
         )
         lines.append(
-            f"{'-' * 16}-+-{'-' * 4}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 18}-+-{'-' * 11}-+-{'-' * 14}-+-{'-' * 10}-+-{'-' * 12}-+-{'-' * 10}-+-{'-' * 10}"
+            f"{'-' * 16}-+-{'-' * 4}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 18}-+-{'-' * 11}-+-{'-' * 14}-+-{'-' * 10}-+-{'-' * 12}-+-{'-' * 10}-+-{'-' * 10}"
         )
         for size, count in sorted(sizes.items()):
             area = size_areas[size]
@@ -1034,13 +1039,13 @@ def write_consolidated_report(
                     " |              |          |            |          |         "
                 )
             lines.append(
-                f"{format_label_size(size):<16} | {jobs_per_size[size]:>4d} | {count:>6d} | "
+                f"{format_label_size(size):<16} | {jobs_per_size[size]:>4d} | {files_per_size[size]:>5d} | {count:>6d} | "
                 f"{sq_ft(area.substrate_sq_in):>17.2f} | "
                 f"{sq_ft(area.label_material_sq_in):>18.2f} | "
                 f"{sq_ft(area.ink_area_sq_in):>11.2f}{cost_str}"
             )
         lines.append(
-            f"{'=' * 16}=+={'=' * 4}=+={'=' * 6}=+={'=' * 17}=+={'=' * 18}=+={'=' * 11}=+={'=' * 14}=+={'=' * 10}=+={'=' * 12}=+={'=' * 10}=+={'=' * 10}"
+            f"{'=' * 16}=+={'=' * 4}=+={'=' * 5}=+={'=' * 6}=+={'=' * 17}=+={'=' * 18}=+={'=' * 11}=+={'=' * 14}=+={'=' * 10}=+={'=' * 12}=+={'=' * 10}=+={'=' * 10}"
         )
         total_cost_str = ""
         if metrics.cost_breakdown:
@@ -1054,37 +1059,69 @@ def write_consolidated_report(
             total_cost_str = (
                 " |              |          |            |          |         "
             )
+        total_files = sum(files_per_size.values())
         lines.append(
-            f"{'Total':<16} | {metrics.total_jobs:>4d} | {metrics.total_output_labels:>6d} | "
+            f"{'Total':<16} | {metrics.total_jobs:>4d} | {total_files:>5d} | {metrics.total_output_labels:>6d} | "
             f"{sq_ft(metrics.total_substrate_sq_in):>17.2f} | "
             f"{sq_ft(metrics.total_label_material_sq_in):>18.2f} | "
             f"{sq_ft(metrics.total_ink_area_sq_in):>11.2f}{total_cost_str}"
         )
     else:
         lines.append(
-            f"{'Label Size (WxH)':<16} | {'Jobs':>4} | {'Labels':>6} | "
+            f"{'Label Size (WxH)':<16} | {'Jobs':>4} | {'Files':>5} | {'Labels':>6} | "
             f"{'Substrate (sq ft)':>17} | {'Label Area (sq ft)':>18} | {'Ink (sq ft)':>11}"
         )
         lines.append(
-            f"{'-' * 16}-+-{'-' * 4}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 18}-+-{'-' * 11}"
+            f"{'-' * 16}-+-{'-' * 4}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 18}-+-{'-' * 11}"
         )
         for size, count in sorted(sizes.items()):
             area = size_areas[size]
             lines.append(
-                f"{format_label_size(size):<16} | {jobs_per_size[size]:>4d} | {count:>6d} | "
+                f"{format_label_size(size):<16} | {jobs_per_size[size]:>4d} | {files_per_size[size]:>5d} | {count:>6d} | "
                 f"{sq_ft(area.substrate_sq_in):>17.2f} | "
                 f"{sq_ft(area.label_material_sq_in):>18.2f} | "
                 f"{sq_ft(area.ink_area_sq_in):>11.2f}"
             )
         lines.append(
-            f"{'=' * 16}=+={'=' * 4}=+={'=' * 6}=+={'=' * 17}=+={'=' * 18}=+={'=' * 11}"
+            f"{'=' * 16}=+={'=' * 4}=+={'=' * 5}=+={'=' * 6}=+={'=' * 17}=+={'=' * 18}=+={'=' * 11}"
         )
+        total_files = sum(files_per_size.values())
         lines.append(
-            f"{'Total':<16} | {metrics.total_jobs:>4d} | {metrics.total_output_labels:>6d} | "
+            f"{'Total':<16} | {metrics.total_jobs:>4d} | {total_files:>5d} | {metrics.total_output_labels:>6d} | "
             f"{sq_ft(metrics.total_substrate_sq_in):>17.2f} | "
             f"{sq_ft(metrics.total_label_material_sq_in):>18.2f} | "
             f"{sq_ft(metrics.total_ink_area_sq_in):>11.2f}"
         )
+    lines.append("")
+
+    lines.append(subrule)
+    lines.append("VENDOR LABEL SIZE BREAKDOWN")
+    lines.append(subrule)
+    lines.append(
+        f"{'Label Size (WxH)':<16} | {'Jobs':>4} | {'Files':>5} | {'Labels':>6} | "
+        f"{'Substrate (sq ft)':>17} | {'Label Area (sq ft)':>18} | {'Ink (sq ft)':>11}"
+    )
+    lines.append(
+        f"{'-' * 16}-+-{'-' * 4}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 18}-+-{'-' * 11}"
+    )
+    for size, count in sorted(sizes.items()):
+        area = size_areas[size]
+        lines.append(
+            f"{format_label_size(size):<16} | {jobs_per_size[size]:>4d} | {files_per_size[size]:>5d} | {count:>6d} | "
+            f"{sq_ft(area.substrate_sq_in):>17.2f} | "
+            f"{sq_ft(area.label_material_sq_in):>18.2f} | "
+            f"{sq_ft(area.ink_area_sq_in):>11.2f}"
+        )
+    lines.append(
+        f"{'=' * 16}=+={'=' * 4}=+={'=' * 5}=+={'=' * 6}=+={'=' * 17}=+={'=' * 18}=+={'=' * 11}"
+    )
+    total_files = sum(files_per_size.values())
+    lines.append(
+        f"{'Total':<16} | {metrics.total_jobs:>4d} | {total_files:>5d} | {metrics.total_output_labels:>6d} | "
+        f"{sq_ft(metrics.total_substrate_sq_in):>17.2f} | "
+        f"{sq_ft(metrics.total_label_material_sq_in):>18.2f} | "
+        f"{sq_ft(metrics.total_ink_area_sq_in):>11.2f}"
+    )
     lines.append("")
 
     # FILE BREAKDOWN section - list all unique PDF files with their metrics
