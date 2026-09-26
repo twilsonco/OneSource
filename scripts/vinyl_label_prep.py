@@ -699,6 +699,60 @@ def page_height_in(num_instances: int) -> float:
     )
 
 
+def calculate_minimum_page_height(num_instances: int) -> float:
+    """Calculate the minimum page height needed to fit num_instances labels.
+
+    Trims unnecessary space by using actual row counts in partial sheets.
+    For sheet layouts, if the last sheet-row contains only one sheet and that
+    sheet is partial, height is based on rows actually used. Otherwise uses
+    standard sheet height.
+    """
+    if num_instances == 0:
+        return PAGE_TOP_MARGIN_IN + PAGE_BOTTOM_MARGIN_IN
+
+    if LABELS_PER_SHEET_COL == 0:
+        # Auto rows: labels flow in a single sheet with unbounded height
+        n_label_rows = -(-num_instances // SHEET_COLS)
+        return PAGE_TOP_MARGIN_IN + n_label_rows * FOOT_H_IN + PAGE_BOTTOM_MARGIN_IN
+
+    # Fixed sheets
+    n_sheets = -(-num_instances // LABELS_PER_SHEET)
+    n_sheet_rows = -(-n_sheets // SHEETS_PER_ROW)
+    sheets_in_last_row = n_sheets % SHEETS_PER_ROW
+    if sheets_in_last_row == 0:
+        sheets_in_last_row = SHEETS_PER_ROW
+
+    # How many instances in the last sheet?
+    remaining_in_last_sheet = num_instances % LABELS_PER_SHEET
+    if remaining_in_last_sheet == 0:
+        remaining_in_last_sheet = LABELS_PER_SHEET
+
+    # Standard height for full sheet-rows
+    standard_height = (
+        PAGE_TOP_MARGIN_IN
+        + n_sheet_rows * SHEET_H_IN
+        + max(0, n_sheet_rows - 1) * VERTICAL_GAP_IN
+        + PAGE_BOTTOM_MARGIN_IN
+    )
+
+    # Optimization: if the last sheet-row has only 1 sheet and it's partial,
+    # reduce the last sheet-row height to just the rows used
+    if sheets_in_last_row == 1:
+        rows_in_last_sheet = -(-remaining_in_last_sheet // SHEET_COLS)
+        if rows_in_last_sheet < LABELS_PER_SHEET_COL:
+            # Partial sheet in last row - trim it
+            return (
+                PAGE_TOP_MARGIN_IN
+                + (n_sheet_rows - 1) * SHEET_H_IN
+                + max(0, n_sheet_rows - 2) * VERTICAL_GAP_IN
+                + (VERTICAL_GAP_IN if n_sheet_rows > 1 else 0)
+                + rows_in_last_sheet * FOOT_H_IN
+                + PAGE_BOTTOM_MARGIN_IN
+            )
+
+    return standard_height
+
+
 def label_position_in(idx: int, page_h_in: float) -> tuple[float, float]:
     """Return (x_in, y_bottom_in) of the bottom-left corner of label ``idx``.
 
@@ -1042,16 +1096,19 @@ def calculate_per_pdf_metrics(
     per_label: list[LabelMetrics],
     page_breaks: list[tuple[int, int]],
     copies_per_label: int,
+    page_heights_in: list[float] | None = None,
 ) -> list[PdfMetrics]:
     """Calculate aggregated metrics for each PDF based on page breaks.
 
     ``page_breaks`` is a list of (start_idx, end_idx) tuples indicating which
     instances belong to each PDF. For each PDF, aggregate metrics from the
-    per_label data for those instances.
+    per_label data for those instances. ``page_heights_in`` provides the actual
+    page height for each PDF, used to calculate substrate area (if None, substrate
+    area is not included in PdfMetrics).
     """
     per_pdf_metrics: list[PdfMetrics] = []
 
-    for start_idx, end_idx in page_breaks:
+    for pdf_idx, (start_idx, end_idx) in enumerate(page_breaks):
         total_labels = 0
         total_chars = 0
         total_ink_area = 0.0
@@ -1120,6 +1177,9 @@ def calculate_per_pdf_metrics(
                 cost_breakdown=pdf_cost,
             )
         )
+        # Note: substrate area is now pre-calculated and stored in total_substrate_sq_in above,
+        # but PdfMetrics doesn't have a substrate field. This value is used in the caller
+        # for metrics aggregation.
 
     return per_pdf_metrics
 
@@ -1869,7 +1929,7 @@ def build_pdf(
     soft_page_height_in: float = SOFT_PAGE_HEIGHT_IN,
     label_w_in: float = LABEL_W_IN,
     label_h_in: float = LABEL_H_IN,
-) -> list[Path]:
+) -> tuple[list[Path], list[float]]:
     """Lay out ``labels`` (each printed COPIES_PER_LABEL times) into sheets and write PDF(s).
 
     ``per_label`` provides the precomputed horizontal scale for each unique
@@ -1883,14 +1943,14 @@ def build_pdf(
     including label dimensions and counts (e.g., out_8x3_24-labels.pdf →
     out_8x3_24-labels-1.pdf, out_8x3_24-labels-2.pdf, ...).
 
-    Returns a list of Path objects for all created PDFs.
+    Returns a tuple of (list of Path objects for all created PDFs, list of actual page heights in inches).
     """
     font_name, _registered_path = _register_bold_font(font_path)
     scale_by_text = {m.text: m.horizontal_scale for m in per_label}
     instances = [lbl for lbl in labels for _ in range(COPIES_PER_LABEL)]
 
     if not instances:
-        return []
+        return [], []
 
     # Calculate page breaks if not provided
     if page_breaks is None:
@@ -1922,17 +1982,20 @@ def build_pdf(
             )
 
     # Draw each page
+    page_heights: list[float] = []
     for page_num, (start_idx, end_idx) in enumerate(page_breaks):
         page_instances = instances[start_idx : end_idx + 1]
-        page_h_in = page_height_in(len(page_instances))
+        # Use minimum page height to eliminate unnecessary whitespace
+        min_page_h_in = calculate_minimum_page_height(len(page_instances))
+        page_heights.append(min_page_h_in)
         pdf_path = pdf_paths[page_num] if page_num < len(pdf_paths) else pdf_paths[0]
 
-        c = Canvas(str(pdf_path), pagesize=(PAGE_W_IN * 72.0, page_h_in * 72.0))
+        c = Canvas(str(pdf_path), pagesize=(PAGE_W_IN * 72.0, min_page_h_in * 72.0))
 
-        # Compute positions for this page's instances
+        # Compute positions for this page's instances using minimum page height
         # Note: positions are computed from 0 to len(page_instances)-1
         positions = [
-            label_position_in(idx, page_h_in) for idx in range(len(page_instances))
+            label_position_in(idx, min_page_h_in) for idx in range(len(page_instances))
         ]
 
         # Borders are drawn as one de-duplicated grid
@@ -1947,12 +2010,12 @@ def build_pdf(
 
         # Draw sheet separators if enabled
         if DRAW_SHEET_SEPARATORS:
-            draw_sheet_separators(c, page_h_in)
+            draw_sheet_separators(c, min_page_h_in)
 
         c.showPage()
         c.save()
 
-    return pdf_paths
+    return pdf_paths, page_heights
 
 
 # --- CLI ----------------------------------------------------------------------
@@ -2362,7 +2425,7 @@ def process_job(
         vertical_gap_in=config.vertical_gap_in,
     )
 
-    pdf_paths = build_pdf(
+    pdf_paths_and_heights = build_pdf(
         labels,
         out_path,
         per_label,
@@ -2374,6 +2437,28 @@ def process_job(
         label_w_in=config.label_w_in,
         label_h_in=config.label_h_in,
     )
+    pdf_paths, page_heights = pdf_paths_and_heights
+
+    # Recalculate substrate area using actual page heights
+    actual_total_substrate_sq_in = sum(PAGE_W_IN * h for h in page_heights)
+    actual_total_page_height_in = sum(page_heights)
+    # Update global_metrics with actual substrate area and page height
+    global_metrics = replace(
+        global_metrics,
+        total_substrate_sq_in=actual_total_substrate_sq_in,
+        page_height_in=actual_total_page_height_in,
+        material_yield_pct=(
+            (
+                global_metrics.total_label_material_sq_in
+                / actual_total_substrate_sq_in
+                * 100.0
+            )
+            if actual_total_substrate_sq_in > 0
+            else 0.0
+        ),
+        linear_feet=actual_total_substrate_sq_in / PAGE_W_IN / 12.0,
+    )
+
     n_instances = len(labels) * config.copies_per_label
     json_report_path = write_metrics_report(
         per_label,
