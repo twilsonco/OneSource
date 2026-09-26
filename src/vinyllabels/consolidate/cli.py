@@ -68,8 +68,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help=(
-            f"Path for the consolidated text report "
-            f"(default: <directory>/{BASENAME}.txt)."
+            f"Path for the consolidated text report (default: "
+            f"Multi-Job Report/{BASENAME}.txt, beside <directory>)."
         ),
     )
     add_pricing_arguments(parser)

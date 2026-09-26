@@ -9,7 +9,8 @@ This workspace contains utilities for **preparing printing jobs for labels** (e.
 The vinyl label pipeline is a real package: **`src/vinyllabels/`**, installed
 editable by `uv sync` and exposed as the **`generate`** and **`consolidate`**
 console tools (`uv run generate`, `uv run consolidate`). It reads inputs from
-`data/` and emits print-ready output (PDF, PostScript, or similar).
+`data/` and emits print-ready PDFs plus metrics reports (text, JSON, CSV, XLSX)
+into fixed folders beside the input — see `src/vinyllabels/output_paths.py`.
 
 Everything else is delivered as **one-off scripts** in `scripts/`. Shared or
 reused logic belongs in `src/vinyllabels/`; a genuinely one-shot job stays a
@@ -21,7 +22,7 @@ standalone script.
 - **Package manager**: [uv](https://docs.astral.sh/uv/)
 - **Linter / formatter**: [ruff](https://docs.astral.sh/ruff/)
 - **Type checker**: [mypy](https://mypy.readthedocs.io/)
-- **Pre-commit hooks**: [pre-commit](https://pre-commit.com/) runs ruff format, ruff check, and mypy on every `git commit` (config: `.pre-commit-config.yaml`).
+- **Pre-commit hooks**: [pre-commit](https://pre-commit.com/) runs ruff format, ruff check, mypy, and pytest on every `git commit` (config: `.pre-commit-config.yaml`).
 
 ## Common Commands
 
@@ -48,24 +49,23 @@ uv run ruff check .                 # lint
 uv run ruff format .                # format
 uv run mypy .                       # type-check
 
-# Pre-commit hooks (ruff format + ruff check + mypy)
+# Tests (pytest + coverage; the suite is hermetic and takes under a second)
+uv run pytest                       # all tests
+uv run pytest tests/test_layout.py  # one module
+uv run pytest --cov=vinyllabels --cov-report=term-missing
+
+# Pre-commit hooks (ruff format + ruff check + mypy + pytest)
 uv run pre-commit install           # one-time setup per clone
 uv run pre-commit run --all-files   # run all hooks on every file
 uv run pre-commit run               # run all hooks on staged files
 ```
 
-If `ruff` / `mypy` are not yet declared as dev dependencies, add them:
-
-```sh
-uv add --dev ruff mypy
-```
-
 ## Conventions for Scripts
 
-- **One-off scripts** belong in `scripts/`. Give each a descriptive filename (e.g. `vinyl_label_prep.py`, not `script1.py`).
+- **One-off scripts** belong in `scripts/`. Give each a descriptive filename (e.g. `label_length_report.py`, not `script1.py`).
 - **Shared logic** belongs in `src/vinyllabels/`. When logic gets reused, move it into the package instead of copy-pasting it; new modules go under the subpackage that owns the concern (`reportio/` for report writing, `consolidate/` for multi-job work).
 - **Inputs** live in `data/` (e.g. `2027-7-2 labels.txt`). Read them with `pathlib.Path`, never hard-code absolute paths.
-- **Output** (PDF, PS, etc.) should be written to a predictable location — usually a sibling of the input, or a dedicated `out/` folder created on demand.
+- **Output** (PDF, PS, etc.) should be written to a predictable location — usually a sibling of the input, or a dedicated `out/` folder created on demand. Package output already has fixed homes (`PDF Files/`, `Job Report/`, `json/`, `csv/`, `Multi-Job Report/`); keep it there.
 - Keep scripts **standalone and re-runnable**: parse CLI args with `argparse` or `sys.argv`, and accept input/output paths as flags rather than baking them in.
 - Prefer **stdlib** (`csv`, `pathlib`, `argparse`, `dataclasses`) for one-offs. Add a real dependency only when it pays for itself (e.g. `reportlab`, `pillow`, `pypdf`).
 - Prefer **`fpdf2`** or **`reportlab`** for PDF generation when a layout is non-trivial. For raw PostScript, generate text and pipe to `enscript`/`a2ps` or write PS directly when needed.
@@ -92,13 +92,35 @@ uv add --dev ruff mypy
 
 ## Testing
 
-This is a scripts-first repo — there is no `tests/` directory by design. Keep logic in pure functions so it is easy to spot-check from a REPL, and give every script a `def main()` (plus an `if __name__ == "__main__"` block) that can be exercised manually:
+The `vinyllabels` package is covered by a pytest suite in `tests/`, one test
+module per package module, plus `tests/conftest.py` (fixtures) and
+`tests/helpers.py` (plain builders and the shared fixture type aliases):
+
+```sh
+uv run pytest --cov=vinyllabels --cov-report=term-missing
+```
+
+The suite is expected to hold **100% statement and branch coverage** of
+`src/vinyllabels` (`branch = true` in `[tool.coverage.run]`). Rules for new tests:
+
+- **Hermetic**: write only under `tmp_path`; never read or write `data/`, `out/`,
+  or anything under Dropbox. `conftest.py` chdirs every test into its own temp
+  directory so the upward `pricing-config.json` search cannot escape it, and
+  builds a throwaway TTF with `fontTools` instead of depending on Arial.
+- **Typed**: `mypy --strict` covers `tests/`, so every test, fixture, and helper
+  is annotated. No `Any` without a justifying comment.
+- Test behaviour through the public API where one exists; assert on real values
+  (numbers, headers, exit messages), not just that a call returned.
+
+Keep logic in pure functions so it stays easy to test and to spot-check from a
+REPL, and give every script a `def main()` (plus an `if __name__ == "__main__"`
+block) that can be exercised manually:
 
 ```sh
 uv run python -c "from vinyllabels.layout import JobConfig; print(JobConfig(input_path=__import__('pathlib').Path('.')))"
 ```
 
-For anything that changes report output, verify by **differential testing**
+For anything that changes report output, also verify by **differential testing**
 rather than by eye: copy `data/` to two temp directories, run the pre-change
 code against one and your change against the other with the same
 `--pricing-config`, then `diff -r`. Ignore timestamp lines, echoed input paths,
@@ -114,7 +136,7 @@ uv run pre-commit run            # staged files (what `git commit` will run)
 uv run pre-commit run --all-files
 ```
 
-The hooks run ruff format, ruff check (with `--fix`), and mypy. If a hook modifies files (e.g. reformatting), re-verify the change still works, then re-run the hooks until they pass. Do not leave the repo in a state where `git commit` would fail the hooks.
+The hooks run ruff format, ruff check (with `--fix`), mypy, and pytest. If a hook modifies files (e.g. reformatting), re-verify the change still works, then re-run the hooks until they pass. Do not leave the repo in a state where `git commit` would fail the hooks.
 
 ## Git
 

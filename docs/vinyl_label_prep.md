@@ -10,8 +10,7 @@ Two tools form the vinyl label printing pipeline:
 
 Both are console scripts installed by `uv sync`, and both also run as modules
 (`uv run python -m vinyllabels.generate`,
-`uv run python -m vinyllabels.consolidate.cli`). See
-[`refactor.md`](refactor.md) for how they relate to the scripts they replaced.
+`uv run python -m vinyllabels.consolidate.cli`).
 
 ---
 
@@ -23,10 +22,12 @@ usage.
 
 ### Layout
 
-- Each label is 8in × 3in with 1/2in margins on all sides; hairline border
+- Each label is 8in × 3in with 1/4in side and 1/2in top/bottom margins inside
+  it (`--label-h-margin` / `--label-v-margin`); hairline border
   (edges shared between adjacent labels are drawn once, never doubled).
 - Text is 2in tall bold Arial, compressed horizontally if needed.
-- Page is 52in wide with 1in margins on all four sides.
+- Page is 52in wide with 1in top/bottom margins and no left/right margins, so
+  labels run edge-to-edge across the roll unless you ask for margins.
 - Each label is printed twice (`2X`).
 - Labels are organized into "sheets". By default a sheet spans the full page
   width (as many 8in columns as fit between the margins, with no horizontal
@@ -38,7 +39,7 @@ usage.
   evenly between the horizontal gaps (so with 3+ sheets per row the last
   sheet's right edge lands on the right page margin), and sheet separators
   sit at each gap's midpoint.
-- Sheet rows stack vertically, separated by `VERTICAL_GAP_IN`.
+- Sheet rows stack vertically, separated by `--vertical-gap` (2in by default).
 - A sheet size of `0` means "auto": `--labels-per-sheet-row 0` (the default)
   makes a single sheet filling the page width with no horizontal gap;
   `--labels-per-sheet-col 0` makes a single sheet of unbounded height with no
@@ -51,6 +52,14 @@ usage.
   transposes too (a 3×8 grid becomes 8×3); an auto (`0`) count instead stays on
   its own page axis, so vertical labels still fill the page width / flow
   unbounded with the default flags.
+- A page is as tall as its content: sheets stack downwards until the next one
+  would take the page past `--soft-page-height` (80in by default), then the
+  remaining labels continue on the next PDF. The limit is soft — a page that
+  already exceeds it still gets its next full sheet-row, and a single
+  sheet-row taller than the limit is printed as-is — and a page is only closed
+  when the *whole* remainder stops fitting, so a job never splits into two
+  short pages that could have been one. Every page is then trimmed to the rows
+  it actually uses, so a partial trailing sheet leaves no blank space.
 
 ### Input format
 
@@ -58,7 +67,7 @@ A plain text file with one label code per line. Lines starting with `#` are
 treated as comments. Example:
 
 ```text
-# Labels: 8in X 3in with 1/2in margins all around; hairline border
+# Labels: 8in X 3in with 1/2in top/bottom margins; hairline border
 # Text: 2in tall bold Arial, compressed horizontally as necessary
 TUF-1A
 TUF-1B
@@ -68,10 +77,11 @@ TUT-4A
 ### Usage
 
 ```sh
-# Use the default output path (<input>.pdf next to the input)
+# Use the default output path (PDF Files/<input>.pdf next to the input)
 uv run generate -i "data/input.txt"
 
-# Write to a custom location; sibling *_report.txt / *_report.json are also produced
+# Write the PDF somewhere else; the reports are still written beside the input,
+# in Job Report/, json/ and csv/
 uv run generate -i input.txt -o out/labels.pdf
 
 # Process every file matching a glob (quote it), e.g. one length bucket per file
@@ -88,32 +98,50 @@ order (`-o/--output` is only allowed when the input matches a single file).
 ### Options
 
 `-i/--input` is the only required flag. Every layout constant in the tool is
-also an optional flag defaulting to its defined value, e.g. `--page-width`,
-`--page-left-margin` / `--page-right-margin` / `--page-top-margin` /
-`--page-bottom-margin`, `--label-width`, `--label-height`,
-`--label-h-margin`, `--label-v-margin`, `--labels-per-sheet-row` (0 = auto:
-fill the page width, the default), `--labels-per-sheet-col` (0 = auto: one
-unbounded sheet), `--vertical-gap`, `-c/--copies`, `--vertical-labels` (rotate
-labels 90° clockwise), `--border` / `--no-border`, `--border-line-width`,
-`--text-height`, `--cap-height-ratio`, plus `--font` to draw with a specific
-TTF instead of probing for Arial Bold. Run with `-h` for full help.
+also an optional flag defaulting to its defined value, grouped in `--help` as:
+
+- **page** — `--page-width`, `--page-left-margin` / `--page-right-margin` /
+  `--page-top-margin` / `--page-bottom-margin`.
+- **label** — `--label-width`, `--label-height`, `--label-h-margin`,
+  `--label-v-margin`, `--vertical-labels` / `--no-vertical-labels`.
+- **sheet** — `--labels-per-sheet-row` (0 = auto: fill the page width, the
+  default), `--labels-per-sheet-col` (0 = auto: one unbounded sheet),
+  `--vertical-gap`, `--soft-page-height`.
+- **output** — `-c/--copies`, `--border` / `--no-border`,
+  `--border-line-width`, `--border-color`, `--sheet-separators` /
+  `--no-sheet-separators`, `--sheet-separator-color`.
+- **text** — `--text-height`, `--cap-height-ratio`, `--text-color`.
+- **pricing** — see the Pricing section of the
+  [README](../README.md#pricing).
+
+Colours accept the presets `black`/`k`, `blue`/`b`, `green`/`g`, `red`/`r`,
+`orange`/`o`, `yellow`/`y`, `violet`/`v`, `magenta`/`m`, an RGB triple
+(`12,60,200`), or 6 hex digits (`003cc8`). `--font` draws with a specific TTF
+instead of probing for Arial Bold. Run with `-h` for full help, which also
+prints every default.
 
 ### Output
 
 For each run the tool writes:
 
-1. **PDF** — the print-ready label layout, sized to the 52in-wide roll.
-   (`--vertical-labels` appends `_vertical` to the PDF name.)
-2. **`*_report.txt`** — a human-readable metrics report covering:
+1. **PDF** — the print-ready label layout, sized to the 52in-wide roll, in
+   `PDF Files/` next to the input. (`--vertical-labels` appends `_vertical`
+   to the name.) The name embeds the label size and count so printed sheets
+   are identifiable without opening them — `OGA9_6-chars_10x4_72-labels.pdf`
+   — and a job split across pages numbers them in print order:
+   `OGA9_6-chars_10x4_part-001_72-labels.pdf`, `…_part-002_48-labels.pdf`.
+   `generate` never deletes previous output, so clear `PDF Files/` before
+   re-running a job with different layout flags.
+2. **`Job Report/*_report.txt`** — a human-readable metrics report covering:
    - Total substrate required (sq in & linear feet of a 52in roll)
    - Total label area and material yield (%)
    - Total ink area and average ink coverage per label (%)
    - Total character count
    - Per-label breakdown table (label code, chars, horizontal scale, ink area)
-3. **`*_report.json`** — the same data in machine-readable form, consumed by
-   `consolidate` below.
-4. **`*_report.csv` / `*_report_customer.csv`** — the metrics table as CSV, in
-   the internal and the customer column subset.
+3. **`json/*_report.json`** — the same data in machine-readable form, consumed
+   by `consolidate` below.
+4. **`csv/*_report.csv` / `csv/*_report_customer.csv`** — the metrics table as
+   CSV, in the internal and the customer column subset.
 
 Ink area is computed via path integration (Green's theorem) over the TrueType
 glyph outlines using `fontTools.pens.areaPen.AreaPen`. If Arial Bold is not
@@ -140,10 +168,12 @@ uv run consolidate <directory>
 uv run consolidate <directory> -o out/combined.txt
 ```
 
-- `<directory>` — directory containing `*_report.json` files from `generate`.
+- `<directory>` — directory containing `*_report.json` files from `generate`
+  (usually the input job's `json/` folder).
 - `-o/--output` — path for the consolidated text report (default:
-  `<directory>/vinyl_labels_combined.txt`). A JSON sibling (same name, `.json`
-  suffix) is always written next to it.
+  `Multi-Job Report/vinyl_labels_combined.txt`, a sibling of `<directory>`).
+  Every other artifact keeps its default location regardless; only the JSON
+  sibling (same name, `.json` suffix) follows `-o`.
 
 Consolidated reports carry a `report_type: "consolidated"` marker in their
 `job` section and are skipped on later runs, so re-running the script over the
@@ -169,8 +199,9 @@ The JSON report mirrors the per-job schema (`job` metadata plus `global` and
 own totals, so downstream tools can still attribute usage per job.
 
 Alongside the text report, every run writes the breakdown set into
-`Multi-Job Report/` next to the input directory — the per-label listings as
-text and XLSX, and CSV breakdowns by size, job, PDF file, and label code. Each
+`Multi-Job Report/` next to the input directory (its `csv/` and `json/`
+siblings hold the machine-readable halves) — the per-label listings as text
+and XLSX, and CSV breakdowns by size, job, PDF file, and label code. Each
 comes in an internal version, a customer version (columns gated by the
 `customer_report` switches in `pricing-config.json`), and, where a vendor would
 see it, a cost-free vendor version. Emitted PDFs are also copied into
@@ -184,8 +215,13 @@ the vendor CSVs use.
 uv run python scripts/count_line_lengths.py "data/input/full_label_lists"
 uv run python scripts/split_lines_by_length.py "data/input/full_label_lists" 6,8,11,14,21
 
-# 2. Generate a PDF + reports per length bucket
-uv run generate -i "data/input/full_label_lists/output/*.txt"
+# 2. Generate a PDF + reports per length bucket (one layout per bucket)
+uv run generate -i "data/input/full_label_lists/output/*6-chars.txt" \
+    --page-width 50 --label-width 10 --label-height 4 --text-height 3 \
+    --vertical-labels --labels-per-sheet-row 3 --labels-per-sheet-col 6
+uv run generate -i "data/input/full_label_lists/output/*8-chars.txt" \
+    --page-width 50 --label-width 12 --label-height 4 --text-height 3 \
+    --vertical-labels --labels-per-sheet-row 3 --labels-per-sheet-col 6
 
 # 3. Consolidate all jobs' metrics into one report
 uv run consolidate "data/input/full_label_lists/output"

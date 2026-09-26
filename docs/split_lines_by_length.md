@@ -6,7 +6,7 @@ line's character count.
 This pairs with [`count_line_lengths.py`](count_line_lengths.md): once you know
 how line lengths are distributed, this script groups them into separate files
 so each length bucket can be printed with its own layout settings (e.g. one
-font size per bucket in `vinyl_label_prep.py`).
+label size per bucket passed to `generate`).
 
 ## Usage
 
