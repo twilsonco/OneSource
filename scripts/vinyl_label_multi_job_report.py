@@ -2545,13 +2545,19 @@ def write_pdf_file_breakdown_csv(
 
     If include_costs is True, includes full cost breakdown (for internal use).
     If False, uses customer_report_config to determine which columns to include.
+    Records are sorted by (label_size, filename) for consistent ordering,
+    with File # sequentially numbered starting from 1.
     """
     if not pdf_records:
         return
 
+    # Sort by label size first, then filename (matching text report order)
+    sorted_records = sorted(pdf_records, key=lambda r: (r.label_size, r.filename))
+
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         if include_costs:
             fieldnames = [
+                "File #",
                 "Filename",
                 "Label Size (WxH)",
                 "Labels",
@@ -2584,12 +2590,13 @@ def write_pdf_file_breakdown_csv(
             total_labor_cost = 0.0
             total_cost = 0.0
 
-            for record in sorted(pdf_records, key=lambda r: r.filename):
+            for file_num, record in enumerate(sorted_records, start=1):
                 substrate_sqft = sq_ft(record.total_substrate_sq_in)
                 label_area_sqft = sq_ft(record.total_label_material_sq_in)
                 ink_sqft = sq_ft(record.total_ink_area_sq_in)
 
                 row = {
+                    "File #": file_num,
                     "Filename": record.filename,
                     "Label Size (WxH)": record.label_size,
                     "Labels": record.total_output_labels,
@@ -2645,6 +2652,7 @@ def write_pdf_file_breakdown_csv(
             # Write TOTAL row
             total_ink_sqft = sq_ft(total_ink_sq_in)
             total_row = {
+                "File #": "",
                 "Filename": "TOTAL",
                 "Label Size (WxH)": "",  # Non-summable
                 "Labels": total_labels,
@@ -2664,7 +2672,7 @@ def write_pdf_file_breakdown_csv(
             writer.writerow(total_row)
         else:
             # Customer CSV: configurable based on customer_report_config
-            fieldnames = ["Filename", "Labels"]
+            fieldnames = ["File #", "Filename", "Labels"]
 
             # Map config keys to column names
             config_map = {
@@ -2708,12 +2716,13 @@ def write_pdf_file_breakdown_csv(
             total_labor_cost = 0.0
             total_cost = 0.0
 
-            for record in sorted(pdf_records, key=lambda r: r.filename):
+            for file_num, record in enumerate(sorted_records, start=1):
                 substrate_sqft = sq_ft(record.total_substrate_sq_in)
                 label_area_sqft = sq_ft(record.total_label_material_sq_in)
                 ink_sqft = sq_ft(record.total_ink_area_sq_in)
 
                 row = {
+                    "File #": file_num,
                     "Filename": record.filename,
                     "Labels": record.total_output_labels,
                 }
@@ -2785,12 +2794,13 @@ def write_pdf_file_breakdown_csv(
             # Write TOTAL row
             total_ink_sqft = sq_ft(total_ink_sq_in)
             total_row = {
+                "File #": "",
                 "Filename": "TOTAL",
                 "Labels": total_labels,
             }
 
             # Add optional columns to TOTAL row
-            for key in fieldnames[2:]:  # Skip Filename and Labels
+            for key in fieldnames[3:]:  # Skip File #, Filename, and Labels
                 if key == "Label Size (WxH)":
                     total_row[key] = ""  # Non-summable
                 elif key == "Substrate (sq ft)":
