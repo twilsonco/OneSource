@@ -84,6 +84,7 @@ class PdfFileRecord:
     total_characters: int
     total_ink_area_sq_in: float
     total_label_material_sq_in: float
+    total_substrate_sq_in: float = 0.0  # Substrate area in sq inches
     label_size: str = ""  # Label dimensions as "WxH" format
     cost_breakdown: CostBreakdown | None = None
 
@@ -117,6 +118,9 @@ class ConsolidatedLabel:
     instances: int  # printed instances summed across those jobs
     char_count: int  # characters summed across those instances
     ink_area_sq_in: float  # ink area summed across those instances
+    size_w_in: float = 0.0  # label width in inches
+    size_h_in: float = 0.0  # label height in inches
+    substrate_sq_in: float = 0.0  # substrate area in sq inches
     cost_breakdown: CostBreakdown | None = None
 
 
@@ -133,8 +137,9 @@ class ConsolidatedLabelBySize:
     instances: int  # printed instances at this size
     char_count: int  # total characters at this size
     ink_area_sq_in: float  # ink area at this size
-    horizontal_scale: float  # average scale factor across instances
-    linear_feet: float  # linear feet of substrate used (height * copies / 12)
+    substrate_sq_in: float = 0.0  # substrate area in sq inches
+    horizontal_scale: float = 1.0  # average scale factor across instances
+    linear_feet: float = 0.0  # linear feet of substrate used (height * copies / 12)
     text_height_in: float = 2.0  # average text height in inches
     cost_breakdown: CostBreakdown | None = None
 
@@ -553,6 +558,8 @@ def consolidate_labels(
     jobs_seen: Counter[str] = Counter()
     instances: Counter[str] = Counter()
     ink_areas: dict[str, float] = {}
+    substrate_areas: dict[str, float] = {}  # substrate area in sq inches
+    label_sizes: dict[str, tuple[float, float]] = {}  # text -> (width, height)
     total_costs: dict[str, float] = {}
     unit_prices: dict[str, float] = {}
     ink_costs: dict[str, float] = {}
@@ -563,12 +570,36 @@ def consolidate_labels(
     labor_costs: dict[str, float] = {}
 
     for report in reports:
+        # Get the label size for this report (all labels in a job share the same size)
+        size_w_in = 0.0
+        size_h_in = 0.0
+        if report.label_sizes:
+            for w, h in report.label_sizes.keys():
+                size_w_in = w
+                size_h_in = h
+                break
+
         for label in report.per_label:
             jobs_seen[label.text] += 1
             instances[label.text] += report.copies_per_label
             ink_areas[label.text] = ink_areas.get(label.text, 0.0) + (
                 label.ink_area_sq_in * report.copies_per_label
             )
+            # Calculate substrate from material using yield ratio
+            label_material_sq_in = size_w_in * size_h_in * report.copies_per_label
+            yield_ratio = (
+                report.global_metrics.total_substrate_sq_in
+                / report.global_metrics.total_label_material_sq_in
+                if report.global_metrics.total_label_material_sq_in > 0
+                else 1.0
+            )
+            substrate_sq_in = label_material_sq_in * yield_ratio
+            substrate_areas[label.text] = substrate_areas.get(label.text, 0.0) + (
+                substrate_sq_in
+            )
+            # Store the label size (assume consistent size across jobs)
+            if label.text not in label_sizes:
+                label_sizes[label.text] = (size_w_in, size_h_in)
             if label.cost_breakdown:
                 cb = label.cost_breakdown
                 total_costs[label.text] = total_costs.get(label.text, 0.0) + (
@@ -623,6 +654,7 @@ def consolidate_labels(
                 unit_price=final_unit_price,
             )
 
+        size_w, size_h = label_sizes.get(text, (0.0, 0.0))
         labels_list.append(
             ConsolidatedLabel(
                 text=text,
@@ -630,6 +662,9 @@ def consolidate_labels(
                 instances=instances[text],
                 char_count=len(text) * instances[text],
                 ink_area_sq_in=ink_areas[text],
+                size_w_in=size_w,
+                size_h_in=size_h,
+                substrate_sq_in=substrate_areas.get(text, 0.0),
                 cost_breakdown=cost_breakdown,
             )
         )
@@ -646,9 +681,12 @@ def consolidate_labels_by_size(
     same size, we can determine the size for each label from its report.
     """
     # Track metrics by (text, size) tuple
-    # Store: (copies_per_label, ink_area_per_instance, scale, cost_breakdown, text_height_in)
+    # Store: (copies_per_label, ink_area_per_instance, scale, cost_breakdown, text_height_in, yield_ratio, label_width, label_height)
     label_by_size_key: dict[
-        str, list[tuple[int, float, float, CostBreakdown | None, float]]
+        str,
+        list[
+            tuple[int, float, float, CostBreakdown | None, float, float, float, float]
+        ],
     ] = {}
 
     for report in reports:
@@ -656,6 +694,14 @@ def consolidate_labels_by_size(
         label_size = list(report.label_sizes.keys())[0] if report.label_sizes else None
         if label_size is None:
             continue
+
+        # Calculate yield ratio for this report
+        yield_ratio = (
+            report.global_metrics.total_substrate_sq_in
+            / report.global_metrics.total_label_material_sq_in
+            if report.global_metrics.total_label_material_sq_in > 0
+            else 1.0
+        )
 
         for label in report.per_label:
             key_str = f"{label.text}::{label_size[0]}x{label_size[1]}"
@@ -668,6 +714,9 @@ def consolidate_labels_by_size(
                     label.horizontal_scale,
                     label.cost_breakdown,
                     report.text_height_in,
+                    yield_ratio,
+                    label_size[0],
+                    label_size[1],
                 )
             )
 
@@ -696,6 +745,13 @@ def consolidate_labels_by_size(
             total_text_height_weighted / total_instances if total_instances > 0 else 2.0
         )
 
+        # Calculate substrate from material and yield ratio
+        total_substrate_sq_in = 0.0
+        for copies, _, _, _, _, yield_ratio, _, _ in entries:
+            label_material_per_job = label_size[0] * label_size[1] * copies
+            substrate_per_job = label_material_per_job * yield_ratio
+            total_substrate_sq_in += substrate_per_job
+
         # Calculate linear feet from label height
         linear_feet = label_size[1] * total_instances / 12.0
 
@@ -710,7 +766,7 @@ def consolidate_labels_by_size(
         total_cost = 0.0
         total_unit_price = 0.0
 
-        for copies, _, _, cb, _ in entries:
+        for copies, _, _, cb, _, _, _, _ in entries:
             if cb:
                 total_ink_cost += cb.ink_cost * copies
                 total_substrate_cost += cb.substrate_cost * copies
@@ -750,6 +806,7 @@ def consolidate_labels_by_size(
                 instances=total_instances,
                 char_count=total_char_count,
                 ink_area_sq_in=total_ink_area,
+                substrate_sq_in=total_substrate_sq_in,
                 horizontal_scale=avg_scale,
                 linear_feet=linear_feet,
                 text_height_in=avg_text_height,
@@ -873,6 +930,15 @@ def build_pdf_file_records(reports: list[JobReport]) -> list[PdfFileRecord]:
             for pdf_path, pdf_metric in zip(
                 report.output_pdf_files, report.per_pdf_metrics
             ):
+                # Calculate substrate from material using yield ratio
+                yield_ratio = (
+                    report.global_metrics.total_substrate_sq_in
+                    / report.global_metrics.total_label_material_sq_in
+                    if report.global_metrics.total_label_material_sq_in > 0
+                    else 1.0
+                )
+                substrate_sq_in = pdf_metric.total_label_material_sq_in * yield_ratio
+
                 all_pdf_records.append(
                     PdfFileRecord(
                         filename=pdf_path.name,
@@ -880,6 +946,7 @@ def build_pdf_file_records(reports: list[JobReport]) -> list[PdfFileRecord]:
                         total_characters=pdf_metric.total_characters,
                         total_ink_area_sq_in=pdf_metric.total_ink_area_sq_in,
                         total_label_material_sq_in=pdf_metric.total_label_material_sq_in,
+                        total_substrate_sq_in=substrate_sq_in,
                         label_size=label_size_str,
                         cost_breakdown=pdf_metric.cost_breakdown,
                     )
@@ -1072,9 +1139,9 @@ def write_consolidated_report(
             if area.cost_breakdown:
                 cb = area.cost_breakdown
                 cost_str = (
-                    f" | ${cb.substrate_cost:>12.2f} | ${cb.ink_cost:>8.2f} | "
-                    f"${cb.printer_cost:>10.2f} | ${cb.labor_cost:>8.2f} | "
-                    f"${cb.total_cost:>8.2f}"
+                    f" | ${cb.substrate_cost:>13.2f} | ${cb.ink_cost:>9.2f} | "
+                    f"${cb.printer_cost:>11.2f} | ${cb.labor_cost:>9.2f} | "
+                    f"${cb.total_cost:>9.2f}"
                 )
             else:
                 cost_str = (
@@ -1093,9 +1160,9 @@ def write_consolidated_report(
         if metrics.cost_breakdown:
             cb = metrics.cost_breakdown
             total_cost_str = (
-                f" | ${cb.substrate_cost:>12.2f} | ${cb.ink_cost:>8.2f} | "
-                f"${cb.printer_cost:>10.2f} | ${cb.labor_cost:>8.2f} | "
-                f"${cb.total_cost:>8.2f}"
+                f" | ${cb.substrate_cost:>13.2f} | ${cb.ink_cost:>9.2f} | "
+                f"${cb.printer_cost:>11.2f} | ${cb.labor_cost:>9.2f} | "
+                f"${cb.total_cost:>9.2f}"
             )
         else:
             total_cost_str = (
@@ -1184,20 +1251,38 @@ def write_consolidated_report(
             (len(record.filename) for record in sorted_records), default=80
         )
         lines.append(
-            f"{'File #':>6} | {'Filename':<{max_filename_len}} | {'Label WxH':>9} | {'Labels':>6} | {'Substrate (sq ft)':>17} | "
+            f"{'File #':>6} | {'Filename':<{max_filename_len}} | {'Label WxH':>9} | {'Labels':>6} | {'Substrate (sq ft)':>17} | {'Label Area (sq ft)':>17} | "
             f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
         )
         lines.append(
-            f"{'-' * 6}-+-{'-' * max_filename_len}-+-{'-' * 9}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}"
+            f"{'-' * 6}-+-{'-' * max_filename_len}-+-{'-' * 9}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}"
         )
+        total_labels = 0
+        total_substrate_sqft = 0.0
+        total_label_area_sqft = 0.0
+        total_ink_sq_in = 0.0
+        total_ink_sq_ft = 0.0
         for file_num, record in enumerate(sorted_records, start=1):
             lines.append(
                 f"{file_num:>6d} | {record.filename:<{max_filename_len}} | {record.label_size:>9} | {record.total_output_labels:>6d} | "
-                f"{sq_ft(record.total_label_material_sq_in):>17.2f} | "
+                f"{sq_ft(record.total_substrate_sq_in):>17.2f} | {sq_ft(record.total_label_material_sq_in):>17.2f} | "
                 f"{record.total_ink_area_sq_in:>11.2f} | "
                 f"{sq_ft(record.total_ink_area_sq_in):>11.2f}"
             )
-        lines.append(f"Total Files: {len(sorted_records)}")
+            total_labels += record.total_output_labels
+            total_substrate_sqft += sq_ft(record.total_substrate_sq_in)
+            total_label_area_sqft += sq_ft(record.total_label_material_sq_in)
+            total_ink_sq_in += record.total_ink_area_sq_in
+            total_ink_sq_ft += sq_ft(record.total_ink_area_sq_in)
+        lines.append(
+            f"{'=' * 6}=+={'=' * max_filename_len}=+={'=' * 9}=+={'=' * 6}=+={'=' * 17}=+={'=' * 17}=+={'=' * 11}=+={'=' * 11}"
+        )
+        lines.append(
+            f"{'':>6} | {'TOTAL':<{max_filename_len}} | {'':>9} | {total_labels:>6d} | "
+            f"{total_substrate_sqft:>17.2f} | {total_label_area_sqft:>17.2f} | "
+            f"{total_ink_sq_in:>11.2f} | "
+            f"{total_ink_sq_ft:>11.2f}"
+        )
         lines.append("")
 
         # FILE BREAKDOWN VENDOR section - same as FILE BREAKDOWN but without Filename
@@ -1205,20 +1290,38 @@ def write_consolidated_report(
         lines.append("FILE BREAKDOWN VENDOR")
         lines.append(subrule)
         lines.append(
-            f"{'File #':>6} | {'Label WxH':>9} | {'Labels':>6} | {'Substrate (sq ft)':>17} | "
+            f"{'File #':>6} | {'Label WxH':>9} | {'Labels':>6} | {'Substrate (sq ft)':>17} | {'Label Area (sq ft)':>17} | "
             f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
         )
         lines.append(
-            f"{'-' * 6}-+-{'-' * 9}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}"
+            f"{'-' * 6}-+-{'-' * 9}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}"
         )
+        total_labels_vendor = 0
+        total_substrate_sqft_vendor = 0.0
+        total_label_area_sqft_vendor = 0.0
+        total_ink_sq_in_vendor = 0.0
+        total_ink_sq_ft_vendor = 0.0
         for file_num, record in enumerate(sorted_records, start=1):
             lines.append(
                 f"{file_num:>6d} | {record.label_size:>9} | {record.total_output_labels:>6d} | "
-                f"{sq_ft(record.total_label_material_sq_in):>17.2f} | "
+                f"{sq_ft(record.total_substrate_sq_in):>17.2f} | {sq_ft(record.total_label_material_sq_in):>17.2f} | "
                 f"{record.total_ink_area_sq_in:>11.2f} | "
                 f"{sq_ft(record.total_ink_area_sq_in):>11.2f}"
             )
-        lines.append(f"Total Files: {len(sorted_records)}")
+            total_labels_vendor += record.total_output_labels
+            total_substrate_sqft_vendor += sq_ft(record.total_substrate_sq_in)
+            total_label_area_sqft_vendor += sq_ft(record.total_label_material_sq_in)
+            total_ink_sq_in_vendor += record.total_ink_area_sq_in
+            total_ink_sq_ft_vendor += sq_ft(record.total_ink_area_sq_in)
+        lines.append(
+            f"{'=' * 6}=+={'=' * 9}=+={'=' * 6}=+={'=' * 17}=+={'=' * 17}=+={'=' * 11}=+={'=' * 11}"
+        )
+        lines.append(
+            f"{'':>6} | {'TOTAL':>9} | {total_labels_vendor:>6d} | "
+            f"{total_substrate_sqft_vendor:>17.2f} | {total_label_area_sqft_vendor:>17.2f} | "
+            f"{total_ink_sq_in_vendor:>11.2f} | "
+            f"{total_ink_sq_ft_vendor:>11.2f}"
+        )
         lines.append("")
 
     lines.append(subrule)
@@ -1233,12 +1336,19 @@ def write_consolidated_report(
         default=33,
     )
     lines.append(
-        f"{'Input File':<{max_input_file_len}} | {'WxH':>5} | {'# Files':>7} | {'Roll':>5} | {'Labels':>6} | {'Lin Ft':>9} | "
+        f"{'Input File':<{max_input_file_len}} | {'WxH':>5} | {'# Files':>7} | {'Roll':>5} | {'Labels':>6} | {'Substrate (sq ft)':>17} | {'Label Area (sq ft)':>17} | {'Lin Ft':>9} | "
         f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
     )
     lines.append(
-        f"{'-' * max_input_file_len}-+-{'-' * 5}-+-{'-' * 7}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 9}-+-{'-' * 11}-+-{'-' * 11}"
+        f"{'-' * max_input_file_len}-+-{'-' * 5}-+-{'-' * 7}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 17}-+-{'-' * 9}-+-{'-' * 11}-+-{'-' * 11}"
     )
+    total_job_files = 0
+    total_job_labels = 0
+    total_job_substrate_sqft = 0.0
+    total_job_label_area_sqft = 0.0
+    total_job_lin_ft = 0.0
+    total_job_ink_sq_in = 0.0
+    total_job_ink_sq_ft = 0.0
     for report in reports:
         gm = report.global_metrics
         input_file = display_input_file(report.input_file, directory.parent)
@@ -1251,29 +1361,72 @@ def write_consolidated_report(
                 break
         lines.append(
             f"{input_file:<{max_input_file_len}} | {label_size_str:>5} | {num_files:>7d} | {report.page_width_in:>5.0f} | "
-            f"{gm.total_output_labels:>6d} | {gm.linear_feet:>9.2f} | "
+            f"{gm.total_output_labels:>6d} | {sq_ft(gm.total_substrate_sq_in):>17.2f} | {sq_ft(gm.total_label_material_sq_in):>17.2f} | {gm.linear_feet:>9.2f} | "
             f"{gm.total_ink_area_sq_in:>11.2f} | "
             f"{sq_ft(gm.total_ink_area_sq_in):>11.2f}"
         )
+        total_job_files += num_files
+        total_job_labels += gm.total_output_labels
+        total_job_substrate_sqft += sq_ft(gm.total_substrate_sq_in)
+        total_job_label_area_sqft += sq_ft(gm.total_label_material_sq_in)
+        total_job_lin_ft += gm.linear_feet
+        total_job_ink_sq_in += gm.total_ink_area_sq_in
+        total_job_ink_sq_ft += sq_ft(gm.total_ink_area_sq_in)
+    lines.append(
+        f"{'=' * max_input_file_len}=+={'=' * 5}=+={'=' * 7}=+={'=' * 5}=+={'=' * 6}=+={'=' * 17}=+={'=' * 17}=+={'=' * 9}=+={'=' * 11}=+={'=' * 11}"
+    )
+    lines.append(
+        f"{'TOTAL':<{max_input_file_len}} | {'':>5} | {total_job_files:>7d} | {'':>5} | {total_job_labels:>6d} | {total_job_substrate_sqft:>17.2f} | {total_job_label_area_sqft:>17.2f} | {total_job_lin_ft:>9.2f} | "
+        f"{total_job_ink_sq_in:>11.2f} | "
+        f"{total_job_ink_sq_ft:>11.2f}"
+    )
     lines.append("")
     lines.append(subrule)
     lines.append("PER-LABEL BREAKDOWN")
     lines.append(subrule)
-    # Get max label code length for formatting
+    # Get max label code length for formatting, ensuring at least as wide as header
     max_label_code_len = max((len(label.text) for label in labels), default=16)
+    max_label_code_len = max(max_label_code_len, 10)  # Minimum width for "Label Code"
     lines.append(
         f"{'Label Code':<{max_label_code_len}} | {'Jobs':>4} | {'Copies':>5} | {'Chars':>5} | "
+        f"{'Label Area (sq ft)':>18} | {'Substrate (sq ft)':>17} | "
         f"{'Ink Area (sq in)':>16} | {'Ink Area (sq ft)':>16}"
     )
     lines.append(
-        f"{'-' * max_label_code_len}-+-{'-' * 4}-+-{'-' * 5}-+-{'-' * 5}-+-{'-' * 18}-+-{'-' * 18}"
+        f"{'-' * max_label_code_len}-+-{'-' * 4}-+-{'-' * 6}-+-{'-' * 5}-+-{'-' * 18}-+-{'-' * 17}-+-{'-' * 16}-+-{'-' * 16}"
     )
+    total_per_label_jobs = 0
+    total_per_label_copies = 0
+    total_per_label_chars = 0
+    total_per_label_area_sqft = 0.0
+    total_per_label_substrate_sqft = 0.0
+    total_per_label_ink_sq_in = 0.0
+    total_per_label_ink_sq_ft = 0.0
     for label in labels:
+        # Calculate label area: design size * number of instances
+        label_area = (label.size_w_in * label.size_h_in) * label.instances
         lines.append(
-            f"{label.text:<{max_label_code_len}} | {label.jobs:>4d} | {label.instances:>5d} | "
-            f"{label.char_count:>5d} | {label.ink_area_sq_in:>16.4f} | "
+            f"{label.text:<{max_label_code_len}} | {label.jobs:>4d} | {label.instances:>6d} | "
+            f"{label.char_count:>5d} | {sq_ft(label_area):>18.4f} | {sq_ft(label.substrate_sq_in):>17.2f} | "
+            f"{label.ink_area_sq_in:>16.4f} | "
             f"{sq_ft(label.ink_area_sq_in):>16.4f}"
         )
+        total_per_label_jobs += label.jobs
+        total_per_label_copies += label.instances
+        total_per_label_chars += label.char_count
+        total_per_label_area_sqft += sq_ft(label_area)
+        total_per_label_substrate_sqft += sq_ft(label.substrate_sq_in)
+        total_per_label_ink_sq_in += label.ink_area_sq_in
+        total_per_label_ink_sq_ft += sq_ft(label.ink_area_sq_in)
+    lines.append(
+        f"{'=' * max_label_code_len}=+={'=' * 4}=+={'=' * 5}=+={'=' * 5}=+={'=' * 18}=+={'=' * 17}=+={'=' * 16}=+={'=' * 16}"
+    )
+    lines.append(
+        f"{'TOTAL':<{max_label_code_len}} | {total_per_label_jobs:>4d} | {total_per_label_copies:>6d} | "
+        f"{total_per_label_chars:>5d} | {total_per_label_area_sqft:>18.4f} | {total_per_label_substrate_sqft:>17.2f} | "
+        f"{total_per_label_ink_sq_in:>16.4f} | "
+        f"{total_per_label_ink_sq_ft:>16.4f}"
+    )
     lines.append(rule)
     lines.append("")
 
@@ -1972,7 +2125,7 @@ def write_job_breakdown_csv(
                 "Text Height (in)",
                 "Files",
                 "Labels",
-                "Linear Feet",
+                "Substrate (sq ft)",
                 "Label Area (sq ft)",
                 "Ink (sq in)",
                 "Ink (sq ft)",
@@ -1991,6 +2144,7 @@ def write_job_breakdown_csv(
 
             # Accumulators for TOTAL row
             total_labels = 0
+            total_substrate_sqft = 0.0
             total_linear_feet = 0.0
             total_label_area_sqft = 0.0
             total_ink_sq_in = 0.0
@@ -2015,6 +2169,7 @@ def write_job_breakdown_csv(
                     if report.label_sizes
                     else ""
                 )
+                substrate_sqft = sq_ft(gm.total_substrate_sq_in)
                 label_area_sqft = sq_ft(gm.total_label_material_sq_in)
                 num_files = (
                     len(report.output_pdf_files) if report.output_pdf_files else 1
@@ -2025,13 +2180,14 @@ def write_job_breakdown_csv(
                     "Text Height (in)": f"{report.text_height_in:.2f}",
                     "Files": num_files,
                     "Labels": gm.total_output_labels,
-                    "Linear Feet": f"{gm.linear_feet:.2f}",
+                    "Substrate (sq ft)": f"{substrate_sqft:.2f}",
                     "Label Area (sq ft)": f"{label_area_sqft:.2f}",
                     "Ink (sq in)": f"{gm.total_ink_area_sq_in:.2f}",
                     "Ink (sq ft)": f"{sq_ft(gm.total_ink_area_sq_in):.2f}",
                 }
                 # Accumulate numeric values
                 total_labels += gm.total_output_labels
+                total_substrate_sqft += substrate_sqft
                 total_linear_feet += gm.linear_feet
                 total_label_area_sqft += label_area_sqft
                 total_ink_sq_in += gm.total_ink_area_sq_in
@@ -2089,7 +2245,7 @@ def write_job_breakdown_csv(
                 "Text Height (in)": "",  # Non-summable
                 "Files": total_files,
                 "Labels": total_labels,
-                "Linear Feet": f"{total_linear_feet:.2f}",
+                "Substrate (sq ft)": f"{total_substrate_sqft:.2f}",
                 "Label Area (sq ft)": f"{total_label_area_sqft:.2f}",
                 "Ink (sq in)": f"{total_ink_sq_in:.2f}",
                 "Ink (sq ft)": f"{sq_ft(total_ink_sq_in):.2f}",
@@ -2113,6 +2269,7 @@ def write_job_breakdown_csv(
             config_map = {
                 "label_size_wxh": "Label Size (WxH)",
                 "text_height_in": "Text Height (in)",
+                "substrate_sq_ft": "Substrate (sq ft)",
                 "linear_feet": "Linear Feet",
                 "label_area_sq_ft": "Label Area (sq ft)",
                 "ink_sq_in": "Ink (sq in)",
@@ -2142,6 +2299,7 @@ def write_job_breakdown_csv(
 
             # Accumulators for TOTAL row
             total_labels = 0
+            total_substrate_sqft = 0.0
             total_linear_feet = 0.0
             total_label_area_sqft = 0.0
             total_ink_sq_in = 0.0
@@ -2157,6 +2315,7 @@ def write_job_breakdown_csv(
             for report in reports:
                 gm = report.global_metrics
                 input_file = display_input_file(report.input_file, directory.parent)
+                substrate_sqft = sq_ft(gm.total_substrate_sq_in)
                 label_area_sqft = sq_ft(gm.total_label_material_sq_in)
                 num_files = (
                     len(report.output_pdf_files) if report.output_pdf_files else 1
@@ -2181,6 +2340,7 @@ def write_job_breakdown_csv(
                 optional_values = {
                     "Label Size (WxH)": label_size_str,
                     "Text Height (in)": f"{report.text_height_in:.2f}",
+                    "Substrate (sq ft)": f"{substrate_sqft:.2f}",
                     "Linear Feet": f"{gm.linear_feet:.2f}",
                     "Label Area (sq ft)": f"{label_area_sqft:.2f}",
                     "Ink (sq in)": f"{gm.total_ink_area_sq_in:.2f}",
@@ -2241,6 +2401,7 @@ def write_job_breakdown_csv(
                         row[key] = ""
 
                 total_labels += gm.total_output_labels
+                total_substrate_sqft += substrate_sqft
                 total_label_area_sqft += label_area_sqft
                 total_ink_sq_in += gm.total_ink_area_sq_in
                 total_linear_feet += gm.linear_feet
@@ -2264,6 +2425,8 @@ def write_job_breakdown_csv(
                     total_row[key] = ""  # Non-summable
                 elif key == "Text Height (in)":
                     total_row[key] = ""  # Non-summable
+                elif key == "Substrate (sq ft)":
+                    total_row[key] = f"{total_substrate_sqft:.2f}"
                 elif key == "Linear Feet":
                     total_row[key] = f"{total_linear_feet:.2f}"
                 elif key == "Label Area (sq ft)":
@@ -2315,6 +2478,7 @@ def write_pdf_file_breakdown_csv(
                 "Label Size (WxH)",
                 "Labels",
                 "Substrate (sq ft)",
+                "Label Area (sq ft)",
                 "Ink (sq in)",
                 "Ink (sq ft)",
                 "Ink Cost ($)",
@@ -2332,6 +2496,7 @@ def write_pdf_file_breakdown_csv(
             # Accumulators for TOTAL row
             total_labels = 0
             total_substrate_sqft = 0.0
+            total_label_area_sqft = 0.0
             total_ink_sq_in = 0.0
             total_ink_cost = 0.0
             total_substrate_cost = 0.0
@@ -2342,7 +2507,8 @@ def write_pdf_file_breakdown_csv(
             total_cost = 0.0
 
             for record in sorted(pdf_records, key=lambda r: r.filename):
-                substrate_sqft = sq_ft(record.total_label_material_sq_in)
+                substrate_sqft = sq_ft(record.total_substrate_sq_in)
+                label_area_sqft = sq_ft(record.total_label_material_sq_in)
                 ink_sqft = sq_ft(record.total_ink_area_sq_in)
 
                 row = {
@@ -2350,6 +2516,7 @@ def write_pdf_file_breakdown_csv(
                     "Label Size (WxH)": record.label_size,
                     "Labels": record.total_output_labels,
                     "Substrate (sq ft)": f"{substrate_sqft:.2f}",
+                    "Label Area (sq ft)": f"{label_area_sqft:.2f}",
                     "Ink (sq in)": f"{record.total_ink_area_sq_in:.2f}",
                     "Ink (sq ft)": f"{ink_sqft:.2f}",
                 }
@@ -2357,6 +2524,7 @@ def write_pdf_file_breakdown_csv(
                 # Accumulate numeric values
                 total_labels += record.total_output_labels
                 total_substrate_sqft += substrate_sqft
+                total_label_area_sqft += label_area_sqft
                 total_ink_sq_in += record.total_ink_area_sq_in
 
                 if record.cost_breakdown:
@@ -2403,6 +2571,7 @@ def write_pdf_file_breakdown_csv(
                 "Label Size (WxH)": "",  # Non-summable
                 "Labels": total_labels,
                 "Substrate (sq ft)": f"{total_substrate_sqft:.2f}",
+                "Label Area (sq ft)": f"{total_label_area_sqft:.2f}",
                 "Ink (sq in)": f"{total_ink_sq_in:.2f}",
                 "Ink (sq ft)": f"{total_ink_sqft:.2f}",
                 "Ink Cost ($)": f"{total_ink_cost:.2f}",
@@ -2423,6 +2592,7 @@ def write_pdf_file_breakdown_csv(
             config_map = {
                 "label_size_wxh": "Label Size (WxH)",
                 "substrate_sq_ft": "Substrate (sq ft)",
+                "label_area_sq_ft": "Label Area (sq ft)",
                 "ink_sq_in": "Ink (sq in)",
                 "ink_sq_ft": "Ink (sq ft)",
                 "ink_cost": "Ink Cost ($)",
@@ -2450,6 +2620,7 @@ def write_pdf_file_breakdown_csv(
             # Accumulators for TOTAL row
             total_labels = 0
             total_substrate_sqft = 0.0
+            total_label_area_sqft = 0.0
             total_ink_sq_in = 0.0
             total_ink_cost = 0.0
             total_substrate_cost = 0.0
@@ -2460,7 +2631,8 @@ def write_pdf_file_breakdown_csv(
             total_cost = 0.0
 
             for record in sorted(pdf_records, key=lambda r: r.filename):
-                substrate_sqft = sq_ft(record.total_label_material_sq_in)
+                substrate_sqft = sq_ft(record.total_substrate_sq_in)
+                label_area_sqft = sq_ft(record.total_label_material_sq_in)
                 ink_sqft = sq_ft(record.total_ink_area_sq_in)
 
                 row = {
@@ -2472,6 +2644,7 @@ def write_pdf_file_breakdown_csv(
                 optional_values = {
                     "Label Size (WxH)": record.label_size,
                     "Substrate (sq ft)": f"{substrate_sqft:.2f}",
+                    "Label Area (sq ft)": f"{label_area_sqft:.2f}",
                     "Ink (sq in)": f"{record.total_ink_area_sq_in:.2f}",
                     "Ink (sq ft)": f"{ink_sqft:.2f}",
                 }
@@ -2526,6 +2699,7 @@ def write_pdf_file_breakdown_csv(
 
                 total_labels += record.total_output_labels
                 total_substrate_sqft += substrate_sqft
+                total_label_area_sqft += label_area_sqft
                 total_ink_sq_in += record.total_ink_area_sq_in
 
                 writer.writerow(row)
@@ -2543,6 +2717,8 @@ def write_pdf_file_breakdown_csv(
                     total_row[key] = ""  # Non-summable
                 elif key == "Substrate (sq ft)":
                     total_row[key] = f"{total_substrate_sqft:.2f}"
+                elif key == "Label Area (sq ft)":
+                    total_row[key] = f"{total_label_area_sqft:.2f}"
                 elif key == "Ink (sq in)":
                     total_row[key] = f"{total_ink_sq_in:.2f}"
                 elif key == "Ink (sq ft)":
@@ -2589,6 +2765,7 @@ def write_pdf_file_breakdown_vendor_csv(
             "Label Size (WxH)",
             "Labels",
             "Substrate (sq ft)",
+            "Label Area (sq ft)",
             "Ink (sq in)",
             "Ink (sq ft)",
         ]
@@ -2596,12 +2773,14 @@ def write_pdf_file_breakdown_vendor_csv(
         writer.writeheader()
 
         total_substrate = 0.0
+        total_label_area = 0.0
         total_ink_sq_in = 0.0
         total_ink_sq_ft = 0.0
         total_labels = 0
 
         for file_num, record in enumerate(sorted_records, start=1):
-            substrate_sq_ft = sq_ft(record.total_label_material_sq_in)
+            substrate_sq_ft = sq_ft(record.total_substrate_sq_in)
+            label_area_sq_ft = sq_ft(record.total_label_material_sq_in)
             ink_sq_ft = sq_ft(record.total_ink_area_sq_in)
 
             writer.writerow(
@@ -2610,12 +2789,14 @@ def write_pdf_file_breakdown_vendor_csv(
                     "Label Size (WxH)": record.label_size,
                     "Labels": record.total_output_labels,
                     "Substrate (sq ft)": f"{substrate_sq_ft:.2f}",
+                    "Label Area (sq ft)": f"{label_area_sq_ft:.2f}",
                     "Ink (sq in)": f"{record.total_ink_area_sq_in:.2f}",
                     "Ink (sq ft)": f"{ink_sq_ft:.2f}",
                 }
             )
 
             total_substrate += substrate_sq_ft
+            total_label_area += label_area_sq_ft
             total_ink_sq_in += record.total_ink_area_sq_in
             total_ink_sq_ft += ink_sq_ft
             total_labels += record.total_output_labels
@@ -2627,6 +2808,7 @@ def write_pdf_file_breakdown_vendor_csv(
                 "Label Size (WxH)": "TOTAL",
                 "Labels": total_labels,
                 "Substrate (sq ft)": f"{total_substrate:.2f}",
+                "Label Area (sq ft)": f"{total_label_area:.2f}",
                 "Ink (sq in)": f"{total_ink_sq_in:.2f}",
                 "Ink (sq ft)": f"{total_ink_sq_ft:.2f}",
             }
@@ -2653,10 +2835,10 @@ def write_per_label_breakdown_csv(
         "Label Code",
         "Copies",
         "Label Size (WxH)",
+        "Label Size (sq in)",
         "Text Height (in)",
         "Char Count",
         "Scale",
-        "Label Size (sq in)",
         "Label Area (sq ft)",
         "Linear Feet",
         "Ink (sq in)",
@@ -2687,6 +2869,7 @@ def write_per_label_breakdown_csv(
             total_linear_feet = 0.0
             total_ink_sq_in = 0.0
             total_ink_sqft = 0.0
+            total_substrate_sq_in = 0.0
             total_ink_cost = 0.0
             total_substrate_cost = 0.0
             total_printer_hours = 0.0
@@ -2707,10 +2890,10 @@ def write_per_label_breakdown_csv(
                     "Label Code": label.text,
                     "Copies": label.instances,
                     "Label Size (WxH)": f"{label.label_size[0]:g}x{label.label_size[1]:g}",
+                    "Label Size (sq in)": f"{label_total_size_sq_in:.2f}",
                     "Text Height (in)": f"{label.text_height_in:.2f}",
                     "Char Count": label.char_count,
                     "Scale": f"{label.horizontal_scale:.4f}",
-                    "Label Size (sq in)": f"{label_total_size_sq_in:.2f}",
                     "Label Area (sq ft)": f"{label_total_area_sqft:.4f}",
                     "Linear Feet": f"{label.linear_feet:.2f}",
                     "Ink (sq in)": f"{label.ink_area_sq_in:.2f}",
@@ -2722,6 +2905,7 @@ def write_per_label_breakdown_csv(
                 total_label_size_sq_in += label_total_size_sq_in
                 total_label_area_sqft += label_total_area_sqft
                 total_linear_feet += label.linear_feet
+                total_substrate_sq_in += label.substrate_sq_in
                 total_ink_sq_in += label.ink_area_sq_in
                 total_ink_sqft += label_ink_sqft
 
@@ -2772,10 +2956,10 @@ def write_per_label_breakdown_csv(
                 "Label Code": "TOTAL",
                 "Copies": total_copies,
                 "Label Size (WxH)": "",  # Non-summable
+                "Label Size (sq in)": f"{total_label_size_sq_in:.2f}",
                 "Text Height (in)": "",  # Non-summable
                 "Char Count": total_char_count,
                 "Scale": "",  # Non-summable
-                "Label Size (sq in)": f"{total_label_size_sq_in:.2f}",
                 "Label Area (sq ft)": f"{total_label_area_sqft:.4f}",
                 "Linear Feet": f"{total_linear_feet:.2f}",
                 "Ink (sq in)": f"{total_ink_sq_in:.2f}",

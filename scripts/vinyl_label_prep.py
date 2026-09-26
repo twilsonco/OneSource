@@ -1315,6 +1315,7 @@ def write_metrics_report(
     pdf_paths: list[Path],
     page_breaks: list[tuple[int, int]] | None = None,
     num_instances: int | None = None,
+    customer_report_config: dict[str, bool] | None = None,
 ) -> Path:
     """Write a human-readable metrics report to ``txt_path``.
 
@@ -1323,6 +1324,7 @@ def write_metrics_report(
     Returns the path of the JSON report.
 
     ``pdf_paths`` should be a list of Path objects (can have one or more items).
+    ``customer_report_config`` determines which columns to include in the customer CSV.
     """
     linear_feet = global_metrics.linear_feet
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1468,6 +1470,7 @@ def write_metrics_report(
         pdf_filenames,
         page_breaks,
         include_costs=False,
+        customer_report_config=customer_report_config,
     )
 
     return json_path
@@ -1658,11 +1661,12 @@ def write_metrics_report_csv(
     pdf_filenames: list[str],
     page_breaks: list[tuple[int, int]] | None = None,
     include_costs: bool = True,
+    customer_report_config: dict[str, bool] | None = None,
 ) -> None:
     """Write per-label metrics to a CSV file.
 
     If include_costs is True, includes full cost breakdown (for internal use).
-    If False, includes only code, character count, and unit price (for customers).
+    If False, uses customer_report_config to determine which optional columns to include.
     Includes a "File" column showing which PDF each label appears in.
     """
     label_to_pdf = _get_label_to_pdf_mapping(per_label, pdf_filenames, page_breaks)
@@ -1724,8 +1728,35 @@ def write_metrics_report_csv(
                     )
                 writer.writerow(row)
         else:
-            # Customer CSV: code, unit price, and file
-            fieldnames = ["File", "Label Code", "Unit Price ($)"]
+            # Customer CSV: configurable columns based on customer_report_config
+            fieldnames = ["File", "Label Code"]
+
+            # Map config keys to column names
+            config_map = {
+                "char_count": "Char Count",
+                "scale": "Scale",
+                "ink_sq_in": "Ink Area (sq in)",
+                "ink_sq_ft": "Ink Area (sq ft)",
+                "ink_cost": "Ink Cost ($)",
+                "substrate_cost": "Substrate Cost ($)",
+                "printer_hours": "Printer Hours",
+                "printer_cost": "Printer Cost ($)",
+                "labor_hours": "Labor Hours",
+                "labor_cost": "Labor Cost ($)",
+                "total_cost": "Total Cost ($)",
+                "price": "Price ($)",
+                "unit_price": "Unit Price ($)",
+            }
+
+            # Build fieldnames based on customer_report_config
+            if customer_report_config:
+                for config_key, col_name in config_map.items():
+                    if customer_report_config.get(config_key, False):
+                        fieldnames.append(col_name)
+            else:
+                # Default customer columns if no config provided
+                fieldnames.extend(["Unit Price ($)"])
+
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for m in per_label:
@@ -1733,10 +1764,56 @@ def write_metrics_report_csv(
                     "File": label_to_pdf.get(m.text, pdf_filenames[0]),
                     "Label Code": m.text,
                 }
+
+                # Add optional columns based on configuration
+                optional_values = {
+                    "Char Count": str(m.char_count),
+                    "Scale": f"{m.horizontal_scale:.3f}",
+                    "Ink Area (sq in)": f"{m.ink_area_sq_in:.4f}",
+                    "Ink Area (sq ft)": f"{sq_ft(m.ink_area_sq_in):.4f}",
+                }
+
+                # Add optional values to row
+                for key, value in optional_values.items():
+                    if key in fieldnames:
+                        row[key] = value
+
+                # Add cost-related columns if configured
                 if m.cost_breakdown:
-                    row["Unit Price ($)"] = f"{m.cost_breakdown.unit_price:.2f}"
+                    cost_values = {
+                        "Ink Cost ($)": f"{m.cost_breakdown.ink_cost:.2f}",
+                        "Substrate Cost ($)": f"{m.cost_breakdown.substrate_cost:.2f}",
+                        "Printer Hours": f"{m.cost_breakdown.printer_hours:.2f}",
+                        "Printer Cost ($)": f"{m.cost_breakdown.printer_cost:.2f}",
+                        "Labor Hours": f"{m.cost_breakdown.labor_hours:.2f}",
+                        "Labor Cost ($)": f"{m.cost_breakdown.labor_cost:.2f}",
+                        "Total Cost ($)": f"{m.cost_breakdown.total_cost:.2f}",
+                        "Price ($)": f"{m.cost_breakdown.ink_cost + m.cost_breakdown.substrate_cost:.2f}",
+                        "Unit Price ($)": f"{m.cost_breakdown.unit_price:.2f}",
+                    }
+                    for key, value in cost_values.items():
+                        if key in fieldnames:
+                            row[key] = value
                 else:
-                    row["Unit Price ($)"] = ""
+                    # Empty costs if no cost breakdown
+                    cost_keys = [
+                        k
+                        for k in [
+                            "Ink Cost ($)",
+                            "Substrate Cost ($)",
+                            "Printer Hours",
+                            "Printer Cost ($)",
+                            "Labor Hours",
+                            "Labor Cost ($)",
+                            "Total Cost ($)",
+                            "Price ($)",
+                            "Unit Price ($)",
+                        ]
+                        if k in fieldnames
+                    ]
+                    for key in cost_keys:
+                        row[key] = ""
+
                 writer.writerow(row)
 
 
@@ -2471,6 +2548,9 @@ def process_job(
         pdf_paths,
         page_breaks=page_breaks,
         num_instances=num_instances,
+        customer_report_config=pricing_config.customer_report
+        if pricing_config
+        else None,
     )
     if len(pdf_paths) == 1:
         print(
