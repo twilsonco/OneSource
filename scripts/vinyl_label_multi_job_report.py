@@ -1118,16 +1118,20 @@ def write_consolidated_report(
         lines.append(subrule)
         lines.append("FILE BREAKDOWN")
         lines.append(subrule)
+        # Get max filename length for formatting
+        max_filename_len = max(
+            (len(record.filename) for record in all_pdf_records), default=80
+        )
         lines.append(
-            f"{'Filename':<40} | {'WxH':>5} | {'Labels':>6} | {'Substrate (sq ft)':>17} | "
+            f"{'Filename':<{max_filename_len}} | {'WxH':>5} | {'Labels':>6} | {'Substrate (sq ft)':>17} | "
             f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
         )
         lines.append(
-            f"{'-' * 40}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}"
+            f"{'-' * max_filename_len}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 17}-+-{'-' * 11}-+-{'-' * 11}"
         )
         for record in sorted(all_pdf_records, key=lambda r: r.filename):
             lines.append(
-                f"{record.filename:<40} | {record.label_size:>5} | {record.total_output_labels:>6d} | "
+                f"{record.filename:<{max_filename_len}} | {record.label_size:>5} | {record.total_output_labels:>6d} | "
                 f"{sq_ft(record.total_label_material_sq_in):>17.2f} | "
                 f"{record.total_ink_area_sq_in:>11.2f} | "
                 f"{sq_ft(record.total_ink_area_sq_in):>11.2f}"
@@ -1138,12 +1142,20 @@ def write_consolidated_report(
     lines.append(subrule)
     lines.append("JOB BREAKDOWN")
     lines.append(subrule)
+    # Get max input file length for formatting
+    max_input_file_len = max(
+        (
+            len(display_input_file(report.input_file, directory.parent))
+            for report in reports
+        ),
+        default=33,
+    )
     lines.append(
-        f"{'Input File':<33} | {'WxH':>5} | {'# Files':>7} | {'Roll':>5} | {'Labels':>6} | {'Lin Ft':>9} | "
+        f"{'Input File':<{max_input_file_len}} | {'WxH':>5} | {'# Files':>7} | {'Roll':>5} | {'Labels':>6} | {'Lin Ft':>9} | "
         f"{'Ink (sq in)':>11} | {'Ink (sq ft)':>11}"
     )
     lines.append(
-        f"{'-' * 33}-+-{'-' * 5}-+-{'-' * 7}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 9}-+-{'-' * 11}-+-{'-' * 11}"
+        f"{'-' * max_input_file_len}-+-{'-' * 5}-+-{'-' * 7}-+-{'-' * 5}-+-{'-' * 6}-+-{'-' * 9}-+-{'-' * 11}-+-{'-' * 11}"
     )
     for report in reports:
         gm = report.global_metrics
@@ -1156,7 +1168,7 @@ def write_consolidated_report(
                 label_size_str = format_label_size(size)
                 break
         lines.append(
-            f"{input_file:<33} | {label_size_str:>5} | {num_files:>7d} | {report.page_width_in:>5.0f} | "
+            f"{input_file:<{max_input_file_len}} | {label_size_str:>5} | {num_files:>7d} | {report.page_width_in:>5.0f} | "
             f"{gm.total_output_labels:>6d} | {gm.linear_feet:>9.2f} | "
             f"{gm.total_ink_area_sq_in:>11.2f} | "
             f"{sq_ft(gm.total_ink_area_sq_in):>11.2f}"
@@ -1165,16 +1177,18 @@ def write_consolidated_report(
     lines.append(subrule)
     lines.append("PER-LABEL BREAKDOWN")
     lines.append(subrule)
+    # Get max label code length for formatting
+    max_label_code_len = max((len(label.text) for label in labels), default=16)
     lines.append(
-        f"{'Label Code':<16} | {'Jobs':>4} | {'Copies':>5} | {'Chars':>5} | "
+        f"{'Label Code':<{max_label_code_len}} | {'Jobs':>4} | {'Copies':>5} | {'Chars':>5} | "
         f"{'Ink Area (sq in)':>16} | {'Ink Area (sq ft)':>16}"
     )
     lines.append(
-        f"{'-' * 16}-+-{'-' * 4}-+-{'-' * 5}-+-{'-' * 5}-+-{'-' * 18}-+-{'-' * 18}"
+        f"{'-' * max_label_code_len}-+-{'-' * 4}-+-{'-' * 5}-+-{'-' * 5}-+-{'-' * 18}-+-{'-' * 18}"
     )
     for label in labels:
         lines.append(
-            f"{label.text:<16} | {label.jobs:>4d} | {label.instances:>5d} | "
+            f"{label.text:<{max_label_code_len}} | {label.jobs:>4d} | {label.instances:>5d} | "
             f"{label.char_count:>5d} | {label.ink_area_sq_in:>16.4f} | "
             f"{sq_ft(label.ink_area_sq_in):>16.4f}"
         )
