@@ -282,6 +282,36 @@ def test_write_metrics_report_txt_without_pricing(
     assert "Ink Area (sq ft)" in text
 
 
+def test_write_metrics_report_txt_grows_the_label_code_column(
+    tmp_path: Path, make_job_config: Callable[..., JobConfig]
+) -> None:
+    long_code = "ALPHA-BRAVO-CHARLIE-DELTA"
+    wide = [
+        LabelMetrics(
+            text=long_code, char_count=25, horizontal_scale=1.0, ink_area_sq_in=2.0
+        )
+    ]
+    out = tmp_path / "r.txt"
+    write_metrics_report_txt(
+        wide,
+        global_metrics(with_costs=False),
+        out,
+        Path("in.txt"),
+        [Path("a.pdf")],
+        make_job_config(),
+        "t",
+    )
+    lines = out.read_text(encoding="utf-8").splitlines()
+    header = lines.index("PER-LABEL BREAKDOWN") + 2
+    data = header + 2
+    # The code column is never clipped, and the -+- separator follows the
+    # grown width so the whole table stays aligned.
+    assert long_code in lines[data]
+    cells = lines[data].split(" | ")
+    assert len(cells[0]) == len(long_code)
+    assert lines[header + 1].split("-+-")[0] == "-" * len(long_code)
+
+
 def test_write_metrics_report_txt_with_no_labels(
     tmp_path: Path, make_job_config: Callable[..., JobConfig]
 ) -> None:

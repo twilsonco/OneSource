@@ -14,6 +14,8 @@ from vinyllabels.reportio.table import (
     render_rule_table,
     render_text_table,
     select_columns,
+    sized_column,
+    table_width,
     write_csv_table,
 )
 
@@ -248,6 +250,39 @@ def test_render_rule_table_no_rows() -> None:
     rule = "="
     lines = render_rule_table([TextColumn("A", 2, lambda row: "")], [], rule=rule)
     assert lines == [rule, " A", rule, rule]
+
+
+def test_sized_column_fits_longest_value_over_header() -> None:
+    column = sized_column("Name", lambda row: row.name, rows())
+    assert column.width == 5  # "alpha" beats the 4-char header
+    assert column.align == "left"
+
+
+def test_sized_column_floors_at_header_width() -> None:
+    column = sized_column("Header", lambda row: row.name, rows())
+    assert column.width == 6
+    empty: TextColumn[Row] = sized_column("Header", lambda row: row.name, [])
+    assert empty.width == 6
+
+
+def test_sized_column_carries_total_through_the_renderer() -> None:
+    columns = [
+        sized_column("N", lambda row: row.name, [Row("long-name", 0.0)]),
+        sized_column(
+            "V", lambda row: row.name, [Row("long-name", 0.0)], total=lambda rows: "T"
+        ),
+    ]
+    lines = render_text_table(columns, [Row("long-name", 0.0)], total_label="TOTAL")
+    # Both the separator and the totals row follow the grown widths, and the
+    # sized column's own total renders in its cell.
+    assert lines[1] == "-" * 9 + "-+-" + "-" * 9
+    assert lines[4] == f"{'TOTAL':<9} | T{'':<8}"
+
+
+def test_table_width_spans_columns_and_joiners() -> None:
+    assert table_width(text_columns()) == 6 + 6 + 3
+    assert table_width([TextColumn("A", 4, lambda row: "")]) == 4
+    assert table_width([]) == 0
 
 
 def test_column_defaults() -> None:

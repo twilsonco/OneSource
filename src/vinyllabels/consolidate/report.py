@@ -38,6 +38,8 @@ from vinyllabels.reportio.table import (
     TextColumn,
     render_rule_table,
     render_text_table,
+    sized_column,
+    table_width,
 )
 from vinyllabels.reportio.xlsx import Sheet, XlsxColumn, write_workbook
 from vinyllabels.sizes import LabelSize, format_label_size, label_sizes_to_json
@@ -568,15 +570,9 @@ def _job_breakdown_table(reports: list[JobReport], directory: Path) -> list[str]
 
 def _per_label_breakdown_table(labels: list[ConsolidatedLabel]) -> list[str]:
     """Render PER-LABEL BREAKDOWN: one row per unique label code."""
-    code_width = max(max((len(label.text) for label in labels), default=16), 10)
-
     columns: list[TextColumn[ConsolidatedLabel]] = [
-        TextColumn(
-            "Label Code",
-            code_width,
-            lambda r: r.text,
-            "left",
-            total=lambda rows: "TOTAL",
+        sized_column(
+            "Label Code", lambda r: r.text, labels, total=lambda rows: "TOTAL"
         ),
         TextColumn(
             "Jobs",
@@ -689,11 +685,10 @@ def write_per_label_report(
     unit price.
     """
     rows = _label_rows(reports, directory)
-    file_width = max((len(row.pdf_file) for row in rows), default=4)
     identity: list[TextColumn[LabelRow]] = [
-        TextColumn("Job", 30, lambda row: row.job, "left"),
-        TextColumn("Label Code", 16, lambda row: row.label.text[:16], "left"),
-        TextColumn("File", max(file_width, 4), lambda row: row.pdf_file, "left"),
+        sized_column("Job", lambda row: row.job, rows),
+        sized_column("Label Code", lambda row: row.label.text, rows),
+        sized_column("File", lambda row: row.pdf_file, rows),
     ]
     if include_costs:
         columns = [
@@ -709,13 +704,16 @@ def write_per_label_report(
                 for header, width, attr in _LABEL_COST_COLUMNS
             ),
         ]
-        rule = "-" * 180
     else:
         columns = [
             *identity,
             TextColumn("Unit Price ($)", 12, _cost_cell("unit_price")),
         ]
-        rule = "-" * 60
+
+    # The full-width rules span the rendered table, which now varies with the
+    # identity columns' content-driven widths, so they are derived from the
+    # columns rather than hard-coded.
+    rule = "-" * table_width(columns)
 
     output_path.write_text(
         "\n".join(

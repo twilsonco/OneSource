@@ -24,6 +24,8 @@ __all__ = [
     "render_rule_table",
     "render_text_table",
     "select_columns",
+    "sized_column",
+    "table_width",
     "write_csv_table",
 ]
 
@@ -152,9 +154,46 @@ class TextColumn(Generic[T]):
     align: Alignment = "right"
     total: Callable[[Sequence[T]], str] | None = None
 
+    @property
+    def display_width(self) -> int:
+        """The rendered width: the declared width, never narrower than the header.
+
+        A header that overflowed its declared width used to push the header row
+        wider than the body and separators; flooring at the header keeps every
+        rendered row (and any full-width rule) the same length.
+        """
+        return max(self.width, len(self.header))
+
 
 def _fit(text: str, width: int, align: Alignment) -> str:
     return f"{text:<{width}}" if align == "left" else f"{text:>{width}}"
+
+
+def sized_column(
+    header: str,
+    value: Callable[[T], str],
+    rows: Sequence[T],
+    *,
+    total: Callable[[Sequence[T]], str] | None = None,
+) -> TextColumn[T]:
+    """One left-aligned text column, as wide as its longest value.
+
+    Columns holding free-form text (label codes, job names, PDF basenames)
+    cannot be sized until every row is known, so the column grows to fit the
+    widest value instead of clipping to a fixed budget. The header is the
+    floor, keeping narrow columns readable. The renderers derive the header
+    row and the ``-+-`` separators from the resulting width, so everything
+    stays aligned.
+    """
+    width = max(len(header), max((len(value(row)) for row in rows), default=0))
+    return TextColumn(header, width, value, "left", total=total)
+
+
+def table_width(columns: Sequence[TextColumn[T]]) -> int:
+    """Rendered width of a text table: every column plus the ``" | "`` joins."""
+    return sum(column.display_width for column in columns) + 3 * max(
+        len(columns) - 1, 0
+    )
 
 
 def render_text_table(
@@ -172,17 +211,19 @@ def render_text_table(
     """
 
     def header_line() -> str:
-        return " | ".join(_fit(c.header, c.width, c.align) for c in columns)
+        return " | ".join(_fit(c.header, c.display_width, c.align) for c in columns)
 
     def separator(char: str, joiner: str) -> str:
-        return joiner.join(char * c.width for c in columns)
+        return joiner.join(char * c.display_width for c in columns)
 
     lines = [
         header_line(),
         separator("-", "-+-"),
     ]
     for row in rows:
-        lines.append(" | ".join(_fit(c.value(row), c.width, c.align) for c in columns))
+        lines.append(
+            " | ".join(_fit(c.value(row), c.display_width, c.align) for c in columns)
+        )
 
     if total_label is None:
         return lines
@@ -191,11 +232,13 @@ def render_text_table(
     total_cells: list[str] = []
     for index, column in enumerate(columns):
         if index == total_label_index:
-            total_cells.append(_fit(total_label, column.width, column.align))
+            total_cells.append(_fit(total_label, column.display_width, column.align))
         elif column.total is not None:
-            total_cells.append(_fit(column.total(rows), column.width, column.align))
+            total_cells.append(
+                _fit(column.total(rows), column.display_width, column.align)
+            )
         else:
-            total_cells.append(_fit("", column.width, column.align))
+            total_cells.append(_fit("", column.display_width, column.align))
     lines.append(" | ".join(total_cells))
     return lines
 
@@ -209,9 +252,9 @@ def render_rule_table(
     ``-+-`` style, so they get their own renderer rather than a flag on the
     house-style one.
     """
-    header = " | ".join(_fit(c.header, c.width, c.align) for c in columns)
+    header = " | ".join(_fit(c.header, c.display_width, c.align) for c in columns)
     body = [
-        " | ".join(_fit(c.value(row), c.width, c.align) for c in columns)
+        " | ".join(_fit(c.value(row), c.display_width, c.align) for c in columns)
         for row in rows
     ]
     return [rule, header, rule, *body, rule]

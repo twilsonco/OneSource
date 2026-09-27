@@ -20,6 +20,7 @@ from vinyllabels.reportio.table import (
     Column,
     TextColumn,
     render_text_table,
+    sized_column,
     write_csv_table,
 )
 from vinyllabels.sizes import format_label_size, label_sizes_to_json
@@ -198,7 +199,7 @@ def write_metrics_report_txt(
 def _per_label_table(per_label: list[LabelMetrics]) -> list[str]:
     """Render the per-label breakdown, with cost columns when pricing exists."""
     base: list[TextColumn[LabelMetrics]] = [
-        TextColumn("Label Code", 16, lambda m: m.text, "left"),
+        sized_column("Label Code", lambda m: m.text, per_label),
         TextColumn("Chars", 5, lambda m: f"{m.char_count:d}"),
         TextColumn("Scale", 8, lambda m: f"{m.horizontal_scale:.3f}"),
         TextColumn("Ink Area (sq in)", 16, lambda m: f"{m.ink_area_sq_in:.4f}"),

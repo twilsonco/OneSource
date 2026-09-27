@@ -35,8 +35,6 @@ from vinyllabels.consolidate.report import (
 from helpers import cost_breakdown, job_report, label_metrics, pdf_metrics
 
 _SUBRULE = "-" * 80
-_INTERNAL_RULE = "-" * 180
-_CUSTOMER_RULE = "-" * 60
 
 
 def normalized(text: str) -> str:
@@ -434,12 +432,14 @@ def test_write_per_label_report_internal(tmp_path: Path) -> None:
     out = tmp_path / "labels.txt"
     write_per_label_report(_reports(tmp_path), out, tmp_path / "json")
     lines = out.read_text(encoding="utf-8").splitlines()
-    assert lines[0] == _INTERNAL_RULE
+    # The rules span the rendered table exactly, however wide it grew.
+    rule = "-" * len(lines[1])
+    assert lines[0] == rule
     assert normalized(lines[1]) == (
         "Job Label Code File Char Count Scale Ink (sq in) Ink (sq ft) Ink ($) "
         "Substrate ($) Print Hrs Print ($) Labor Hrs Labor ($) Total ($) Unit ($)"
     )
-    assert lines[2] == _INTERNAL_RULE
+    assert lines[2] == rule
     # Job a split into two PDFs: AA's first instance lands in a_2.pdf (the
     # first range) and BB's in a_1.pdf; job b recorded no PDFs, so File is blank.
     assert normalized(lines[3]) == (
@@ -448,8 +448,8 @@ def test_write_per_label_report_internal(tmp_path: Path) -> None:
     # An unpriced label leaves every money cell blank.
     assert normalized(lines[4]) == "a BB a_1.pdf 2 1.000 2.0000 0.0139"
     assert normalized(lines[5]) == "b AA 2 1.000 1.0000 0.0069"
-    assert lines[6] == _INTERNAL_RULE
-    assert out.read_text(encoding="utf-8").endswith(f"{_INTERNAL_RULE}\n")
+    assert lines[6] == rule
+    assert out.read_text(encoding="utf-8").endswith(f"{rule}\n")
 
 
 def test_write_per_label_report_customer(tmp_path: Path) -> None:
@@ -458,21 +458,35 @@ def test_write_per_label_report_customer(tmp_path: Path) -> None:
         _reports(tmp_path), out, tmp_path / "json", include_costs=False
     )
     lines = out.read_text(encoding="utf-8").splitlines()
-    assert lines[0] == _CUSTOMER_RULE
+    rule = "-" * len(lines[1])
+    assert lines[0] == rule
     assert normalized(lines[1]) == "Job Label Code File Unit Price ($)"
     assert normalized(lines[3]) == "a AA a_2.pdf 20.00"
     assert normalized(lines[4]) == "a BB a_1.pdf"
-    assert lines[6] == _CUSTOMER_RULE
+    assert lines[6] == rule
 
 
-def test_write_per_label_report_truncates_long_codes(tmp_path: Path) -> None:
+def test_write_per_label_report_grows_identity_columns_to_fit(tmp_path: Path) -> None:
     long_code = "ABCDEFGHIJKLMNOPQRSTU"
-    jobs = [job_report(input_file="a.txt", labels=[label_metrics(long_code, 1.0)])]
+    long_job = "a-much-longer-job-name-than-the-header"
+    long_pdf = "some_really_long_output_file_name.pdf"
+    jobs = [
+        job_report(
+            input_file=f"{long_job}.txt",
+            labels=[label_metrics(long_code, 1.0)],
+            pdfs=[tmp_path / long_pdf],
+        )
+    ]
     out = tmp_path / "labels.txt"
     write_per_label_report(jobs, out, tmp_path / "json")
     lines = out.read_text(encoding="utf-8").splitlines()
-    # Codes are clipped to the 16-character column width.
-    assert normalized(lines[3]).startswith("a ABCDEFGHIJKLMNOP 21")
+    # Identity columns are never clipped: each grows to the longest value,
+    # floored at the header width, so every row prints in full.
+    assert normalized(lines[3]).startswith(f"{long_job} {long_code} {long_pdf}")
+    cells = lines[3].split(" | ")
+    assert len(cells[0]) == len(long_job)
+    assert len(cells[1]) == len(long_code)
+    assert len(cells[2]) == len(long_pdf)
 
 
 def test_write_per_label_report_maps_labels_to_the_first_pdf_without_per_pdf(
