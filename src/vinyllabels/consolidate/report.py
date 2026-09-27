@@ -32,6 +32,7 @@ from vinyllabels.consolidate.model import (
     PdfFileRecord,
     SizeAreas,
 )
+from vinyllabels.job_report import label_to_pdf_mapping
 from vinyllabels.models import CostBreakdown, LabelMetrics
 from vinyllabels.reportio.table import (
     TextColumn,
@@ -63,13 +64,16 @@ _FileRow = tuple[int, PdfFileRecord]
 class LabelRow:
     """One label as it appears in a per-label listing, tagged with its job.
 
-    The listings walk every job's labels, so a row needs the job's display name
-    and design size alongside the label's own metrics.
+    The listings walk every job's labels, so a row needs the job's display name,
+    design size, and emitted PDF alongside the label's own metrics. ``pdf_file``
+    is the basename of the PDF the label first appears in (blank when the job
+    recorded no PDFs).
     """
 
     job: str
     label: LabelMetrics
     size: LabelSize | None = None
+    pdf_file: str = ""
 
     @property
     def label_size(self) -> str:
@@ -636,13 +640,39 @@ _LABEL_COST_COLUMNS: tuple[tuple[str, int, str], ...] = (
 )
 
 
+def _pdf_file_by_label(report: JobReport) -> dict[str, str]:
+    """Map each label code in ``report`` to the PDF basename it first appears in.
+
+    The per-job report stores its emitted PDFs in print order and, for split
+    runs, ``per_pdf`` metrics saying how many instances each PDF holds; walking
+    those counts rebuilds the instance ranges :func:`label_to_pdf_mapping`
+    needs. Without ``per_pdf`` metrics every code maps to the first PDF, and a
+    job that recorded no PDFs at all maps to nothing.
+    """
+    filenames = [path.name for path in report.output_pdf_files or ()]
+    if not filenames:
+        return {}
+    ranges: list[tuple[int, int]] | None = None
+    if report.per_pdf_metrics:
+        ranges = []
+        start = 0
+        for metric in report.per_pdf_metrics:
+            ranges.append((start, start + metric.total_output_labels - 1))
+            start += metric.total_output_labels
+    return label_to_pdf_mapping(
+        report.per_label, filenames, ranges, report.copies_per_label
+    )
+
+
 def _label_rows(reports: list[JobReport], directory: Path) -> list[LabelRow]:
-    """Flatten every job's labels into rows tagged with the job's name and size."""
+    """Flatten every job's labels into rows tagged with the job, size, and PDF."""
     rows: list[LabelRow] = []
     for report in reports:
         name = job_name(report.input_file, directory.parent)
+        files = _pdf_file_by_label(report)
         rows.extend(
-            LabelRow(name, label, report.label_size) for label in report.per_label
+            LabelRow(name, label, report.label_size, files.get(label.text, ""))
+            for label in report.per_label
         )
     return rows
 
@@ -653,14 +683,17 @@ def write_per_label_report(
     directory: Path,
     include_costs: bool = True,
 ) -> None:
-    """Write one row per label per job, tagged with the job it came from.
+    """Write one row per label per job, tagged with the job and PDF it came from.
 
     Internal output carries the full cost breakdown; customer output is just the
     unit price.
     """
+    rows = _label_rows(reports, directory)
+    file_width = max((len(row.pdf_file) for row in rows), default=4)
     identity: list[TextColumn[LabelRow]] = [
         TextColumn("Job", 30, lambda row: row.job, "left"),
         TextColumn("Label Code", 16, lambda row: row.label.text[:16], "left"),
+        TextColumn("File", max(file_width, 4), lambda row: row.pdf_file, "left"),
     ]
     if include_costs:
         columns = [
@@ -687,7 +720,7 @@ def write_per_label_report(
     output_path.write_text(
         "\n".join(
             [
-                *render_rule_table(columns, _label_rows(reports, directory), rule=rule),
+                *render_rule_table(columns, rows, rule=rule),
                 "",
             ]
         ),
@@ -768,6 +801,7 @@ def _internal_xlsx_columns() -> list[XlsxColumn[LabelRow]]:
     """Column definitions for the internal per-label workbook."""
     return [
         XlsxColumn("Label Code", lambda row: row.label.text),
+        XlsxColumn("File", lambda row: row.pdf_file),
         XlsxColumn("Label Size (WxH)", lambda row: row.label_size),
         XlsxColumn("Char Count", lambda row: row.label.char_count),
         XlsxColumn("Scale", lambda row: row.label.horizontal_scale),
@@ -788,6 +822,7 @@ def _customer_xlsx_columns() -> list[XlsxColumn[LabelRow]]:
     """Column definitions for the customer per-label workbook."""
     return [
         XlsxColumn("Label Code", lambda row: row.label.text),
+        XlsxColumn("File", lambda row: row.pdf_file),
         *[
             XlsxColumn(header, _cell(key), config_key)
             for config_key, header, key in _CUSTOMER_XLSX_COLUMNS
@@ -824,6 +859,10 @@ def _workbook_sheets(
     sheets: list[Sheet[LabelRow]] = []
     for report in reports:
         name = job_name(report.input_file, directory.parent)
-        rows = [LabelRow(name, label, report.label_size) for label in report.per_label]
+        files = _pdf_file_by_label(report)
+        rows = [
+            LabelRow(name, label, report.label_size, files.get(label.text, ""))
+            for label in report.per_label
+        ]
         sheets.append(Sheet(name, rows))
     return sheets
