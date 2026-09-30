@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from reportlab.lib.colors import Color
+from reportlab.lib.colors import Color, black, blue, green, magenta, orange, red, yellow
 
 from vinyllabels.colors import PRESET_COLOR_NAMES, parse_color
 
@@ -14,33 +14,31 @@ def hex_of(color: Color) -> str:
 
 
 @pytest.mark.parametrize(
-    ("name", "expected_hex"),
+    ("name", "expected"),
     [
-        ("black", "#000000"),
-        ("k", "#000000"),
-        ("blue", "#0000FF"),
-        ("b", "#0000FF"),
-        ("green", "#00FF00"),
-        ("g", "#00FF00"),
-        ("red", "#FF0000"),
-        ("r", "#FF0000"),
-        ("orange", "#FFA500"),
-        ("o", "#FFA500"),
-        ("yellow", "#FFFF00"),
-        ("y", "#FFFF00"),
-        ("magenta", "#FF00FF"),
-        ("m", "#FF00FF"),
+        ("black", black),
+        ("k", black),
+        ("blue", blue),
+        ("b", blue),
+        ("green", green),
+        ("g", green),
+        ("red", red),
+        ("r", red),
+        ("orange", orange),
+        ("o", orange),
+        ("yellow", yellow),
+        ("y", yellow),
+        ("magenta", magenta),
+        ("m", magenta),
     ],
 )
-def test_preset_names_resolve_to_correct_hex_colors(
-    name: str, expected_hex: str
-) -> None:
-    assert hex_of(parse_color(name)) == expected_hex
+def test_preset_names_resolve_to_reportlab_colors(name: str, expected: object) -> None:
+    assert parse_color(name) is expected
 
 
 @pytest.mark.parametrize("name", ["violet", "v"])
 def test_violet_preset_is_the_documented_hex(name: str) -> None:
-    assert hex_of(parse_color(name)) == "#7F00FF"
+    assert hex_of(parse_color(name)) == "#8B00FF"
 
 
 def test_preset_help_text_lists_the_long_names() -> None:

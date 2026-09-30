@@ -8,30 +8,40 @@ six bare hex digits.
 from __future__ import annotations
 
 from reportlab.lib.colors import Color
+from reportlab.lib.colors import (
+    black,
+    blue,
+    cyan,
+    green,
+    magenta,
+    orange,
+    red,
+    yellow,
+)
 from reportlab.lib.colors import HexColor as RLHexColor
 
 __all__ = ["PRESET_COLOR_NAMES", "parse_color"]
 
-# Preset color names mapping to reportlab colors (defined with precise hex codes).
+# Preset color names mapping to reportlab colors.
 _PRESET_COLORS: dict[str, Color] = {
-    "cyan": RLHexColor("#00FFFF"),
-    "c": RLHexColor("#00FFFF"),
-    "magenta": RLHexColor("#FF00FF"),
-    "m": RLHexColor("#FF00FF"),
-    "yellow": RLHexColor("#FFFF00"),
-    "y": RLHexColor("#FFFF00"),
-    "black": RLHexColor("#000000"),
-    "k": RLHexColor("#000000"),
-    "red": RLHexColor("#FF0000"),
-    "r": RLHexColor("#FF0000"),
-    "green": RLHexColor("#00FF00"),
-    "g": RLHexColor("#00FF00"),
-    "blue": RLHexColor("#0000FF"),
-    "b": RLHexColor("#0000FF"),
-    "orange": RLHexColor("#FFA500"),
-    "o": RLHexColor("#FFA500"),
-    "violet": RLHexColor("#7F00FF"),
-    "v": RLHexColor("#7F00FF"),
+    "cyan": cyan,
+    "c": cyan,
+    "magenta": magenta,
+    "m": magenta,
+    "yellow": yellow,
+    "y": yellow,
+    "black": black,
+    "k": black,
+    "red": red,
+    "r": red,
+    "green": green,
+    "g": green,
+    "blue": blue,
+    "b": blue,
+    "orange": orange,
+    "o": orange,
+    "violet": RLHexColor("#8B00FF"),  # violet (not in standard reportlab)
+    "v": RLHexColor("#8B00FF"),
 }
 
 #: Preset names, for building ``argparse`` help text.
