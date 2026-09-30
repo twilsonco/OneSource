@@ -142,6 +142,7 @@ class JobConfig:
     vertical_labels: bool = VERTICAL_LABELS
     soft_page_height_in: float = SOFT_PAGE_HEIGHT_IN
     flat_label_price: float | None = None
+    skip_postprocess: bool = False
 
     @property
     def usable_page_w_in(self) -> float:

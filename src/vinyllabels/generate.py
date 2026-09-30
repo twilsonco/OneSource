@@ -25,6 +25,7 @@ from vinyllabels.layout import page_breaks as compute_page_breaks
 from vinyllabels.metrics import apply_actual_page_heights, calculate_metrics
 from vinyllabels.models import PricingConfig
 from vinyllabels.output_paths import job_output_paths
+from vinyllabels.postprocess import apply_text_to_curves, load_postprocess_config
 
 __all__ = ["build_argument_parser", "main", "process_job"]
 
@@ -159,6 +160,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help="Fixed price per label (USD) (overrides markup calculation).",
+    )
+
+    postprocess = parser.add_argument_group("post-processing", "output PDF transforms")
+    postprocess.add_argument(
+        "--skip-postprocess",
+        action="store_true",
+        default=False,
+        help="Skip post-processing of PDFs (e.g., text-to-curves conversion). "
+        "Useful when testing or when post-processing is disabled in the config.",
     )
 
     _apply_dataclass_defaults(parser)
@@ -324,6 +334,7 @@ def config_from_args(
         vertical_labels=bool(args.vertical_labels),
         soft_page_height_in=float(args.soft_page_height),
         flat_label_price=args.flat_label_price,
+        skip_postprocess=bool(args.skip_postprocess),
     )
     validate_config(parser, config)
     return config
@@ -389,6 +400,15 @@ def process_job(config: JobConfig, pricing_config: PricingConfig | None = None) 
         if pricing_config
         else None,
     )
+
+    # Apply post-processing if enabled and not skipped
+    if not config.skip_postprocess:
+        postprocess_config = load_postprocess_config()
+        if postprocess_config.enabled:
+            for pdf_path in pdf_paths:
+                success, error_msg = apply_text_to_curves(pdf_path, postprocess_config)
+                if not success:
+                    print(f"Warning: Could not post-process {pdf_path}: {error_msg}")
 
     summary = (
         f"Wrote {num_instances} label instances "

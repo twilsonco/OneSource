@@ -1,0 +1,5 @@
+{
+  "enabled": true,
+  "tool": "gs",
+  "timeout_sec": 30.0
+}
