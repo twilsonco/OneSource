@@ -7,31 +7,28 @@ six bare hex digits.
 
 from __future__ import annotations
 
-from reportlab.lib.colors import Color
+from reportlab.lib.colors import CMYKColor, Color
 from reportlab.lib.colors import (
-    black,
     blue,
-    cyan,
     green,
-    magenta,
     orange,
     red,
-    yellow,
 )
 from reportlab.lib.colors import HexColor as RLHexColor
 
 __all__ = ["PRESET_COLOR_NAMES", "parse_color"]
 
 # Preset color names mapping to reportlab colors.
+# CMYK process primaries emit as CMYK operators in PDF for correct color reproduction.
 _PRESET_COLORS: dict[str, Color] = {
-    "cyan": cyan,
-    "c": cyan,
-    "magenta": magenta,
-    "m": magenta,
-    "yellow": yellow,
-    "y": yellow,
-    "black": black,
-    "k": black,
+    "cyan": CMYKColor(1, 0, 0, 0),
+    "c": CMYKColor(1, 0, 0, 0),
+    "magenta": CMYKColor(0, 1, 0, 0),
+    "m": CMYKColor(0, 1, 0, 0),
+    "yellow": CMYKColor(0, 0, 1, 0),
+    "y": CMYKColor(0, 0, 1, 0),
+    "black": CMYKColor(0, 0, 0, 1),
+    "k": CMYKColor(0, 0, 0, 1),
     "red": red,
     "r": red,
     "green": green,

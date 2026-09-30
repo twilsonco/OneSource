@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from reportlab.lib.colors import Color, black, blue, green, magenta, orange, red, yellow
+from reportlab.lib.colors import CMYKColor, Color, blue, green, orange, red
 
 from vinyllabels.colors import PRESET_COLOR_NAMES, parse_color
 
@@ -16,8 +16,6 @@ def hex_of(color: Color) -> str:
 @pytest.mark.parametrize(
     ("name", "expected"),
     [
-        ("black", black),
-        ("k", black),
         ("blue", blue),
         ("b", blue),
         ("green", green),
@@ -26,14 +24,36 @@ def hex_of(color: Color) -> str:
         ("r", red),
         ("orange", orange),
         ("o", orange),
-        ("yellow", yellow),
-        ("y", yellow),
-        ("magenta", magenta),
-        ("m", magenta),
     ],
 )
-def test_preset_names_resolve_to_reportlab_colors(name: str, expected: object) -> None:
+def test_preset_rgb_colors_resolve_to_reportlab_colors(
+    name: str, expected: object
+) -> None:
     assert parse_color(name) is expected
+
+
+@pytest.mark.parametrize(
+    ("name", "cyan", "magenta", "yellow", "black"),
+    [
+        ("cyan", 1, 0, 0, 0),
+        ("c", 1, 0, 0, 0),
+        ("magenta", 0, 1, 0, 0),
+        ("m", 0, 1, 0, 0),
+        ("yellow", 0, 0, 1, 0),
+        ("y", 0, 0, 1, 0),
+        ("black", 0, 0, 0, 1),
+        ("k", 0, 0, 0, 1),
+    ],
+)
+def test_preset_cmyk_colors_resolve_to_reportlab_cmyk(
+    name: str, cyan: int, magenta: int, yellow: int, black: int
+) -> None:
+    color = parse_color(name)
+    assert isinstance(color, CMYKColor)
+    assert color.cyan == cyan
+    assert color.magenta == magenta
+    assert color.yellow == yellow
+    assert color.black == black
 
 
 @pytest.mark.parametrize("name", ["violet", "v"])
