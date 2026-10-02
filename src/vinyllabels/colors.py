@@ -3,11 +3,14 @@
 Accepts the same three spellings everywhere a color is configurable: a preset
 name, ``r,g,b`` (optionally parenthesised) with components in ``[0, 255]``, or
 six bare hex digits.
+
+Spot colors for cut-ready PDF generation (Roland VersaWorks integration) are
+provided as factory functions using ReportLab's CMYKColorSep with spotName.
 """
 
 from __future__ import annotations
 
-from reportlab.lib.colors import CMYKColor, Color
+from reportlab.lib.colors import CMYKColor, CMYKColorSep, Color
 from reportlab.lib.colors import (
     blue,
     green,
@@ -16,7 +19,12 @@ from reportlab.lib.colors import (
 )
 from reportlab.lib.colors import HexColor as RLHexColor
 
-__all__ = ["PRESET_COLOR_NAMES", "parse_color"]
+__all__ = [
+    "PRESET_COLOR_NAMES",
+    "cutcontour_spot_color",
+    "parse_color",
+    "perfcutcontour_spot_color",
+]
 
 # Preset color names mapping to reportlab colors.
 # CMYK process primaries emit as CMYK operators in PDF for correct color reproduction.
@@ -93,3 +101,31 @@ def parse_color(color_str: str) -> Color:
         return RLHexColor(f"#{color_str}")
     except ValueError as exc:
         raise ValueError(f"Invalid hex color format {color_str}: {exc}") from exc
+
+
+def cutcontour_spot_color() -> CMYKColorSep:
+    """Return a CutContour spot color for Roland VersaWorks plotter integration.
+
+    CutContour is a standard spot color name recognized by RIP software for
+    kiss-cuts (partial cuts that don't go through the backing material). The
+    color is hidden from the printer's ink nozzles and routed directly to the
+    plotter blade. This is implemented using ReportLab's CMYKColorSep with
+    Magenta CMYK (0, 1, 0, 0) as the visual fallback if the RIP software
+    doesn't recognize the spot name.
+
+    Returns a new CMYKColorSep object on each call.
+    """
+    return CMYKColorSep(cyan=0, magenta=1, yellow=0, black=0, spotName="CutContour")
+
+
+def perfcutcontour_spot_color() -> CMYKColorSep:
+    """Return a PerfCutContour spot color for perforated/through cuts.
+
+    PerfCutContour is a spot color name for perforated cuts (full cuts through
+    backing material). Like CutContour, it is routed to the plotter blade and
+    hidden from ink nozzles. This is implemented using ReportLab's CMYKColorSep
+    with Yellow CMYK (0, 0, 1, 0) as the visual fallback.
+
+    Returns a new CMYKColorSep object on each call.
+    """
+    return CMYKColorSep(cyan=0, magenta=0, yellow=1, black=0, spotName="PerfCutContour")

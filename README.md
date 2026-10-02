@@ -58,6 +58,56 @@ The hooks run ruff format, ruff check, mypy and pytest on every commit.
 Both also run as modules: `uv run python -m vinyllabels.generate` and
 `uv run python -m vinyllabels.consolidate.cli`.
 
+### Cut-Ready PDFs for Plotter Integration
+
+The `generate` tool produces **cut-ready PDFs by default**, with special spot color separations recognized by Roland VersaWorks and other RIP (Raster Image Processor) software for automated plotter cutting.
+
+#### Spot Colors
+
+Two spot color separations route cut paths directly to the plotter blade instead of the printer's ink nozzles:
+
+- **CutContour** — For kiss-cuts (label borders). Drawn with Magenta visual fallback (0, 1, 0, 0 CMYK).
+- **PerfCutContour** — For perforated or through-cuts (sheet separators). Drawn with Yellow visual fallback (0, 0, 1, 0 CMYK).
+
+When Roland VersaWorks recognizes these spot colors, it displays animated "marching ants" around the cut paths to confirm plotter routing. If the RIP doesn't recognize the names, it renders the visual fallback colors (magenta borders, yellow separators) so the job still prints and cuts with visible guides.
+
+#### Overprint
+
+Both cut line types have **overprint enabled** (`/OPM 1` in PDF). This prevents the RIP from knocking out (erasing) the printable design under the cut lines, avoiding white halos where cuts meet printed artwork.
+
+#### Usage
+
+```bash
+# Default: generate cut-ready PDFs (CutContour + PerfCutContour with overprint)
+uv run generate -i labels.txt
+
+# Disable cut-ready mode (revert to regular colors, no spot separations)
+uv run generate -i labels.txt --no-cut-ready-borders --no-cut-ready-separators
+
+# Mix: only CutContour for borders, regular color for separators
+uv run generate -i labels.txt --no-cut-ready-separators
+
+# Mix: only PerfCutContour for separators, regular color for borders
+uv run generate -i labels.txt --no-cut-ready-borders
+```
+
+#### Verification
+
+Use the inspection script to confirm cut-ready features in a generated PDF:
+
+```bash
+# Single file
+python scripts/inspect_cut_contours.py PDF_Files/out_8x3_24-labels.pdf
+
+# Entire directory
+python scripts/inspect_cut_contours.py PDF_Files/
+
+# Example output:
+# out_8x3_24-labels.pdf: ✓ CutContour (kiss-cuts) | ✓ PerfCutContour (perf-cuts) | ✓ Overprint enabled
+```
+
+You can also verify in **Adobe Acrobat Pro**: Tools > Print Production > Output Preview. The spot colors should appear as independent separation plates (CMYK + CutContour + PerfCutContour).
+
 ### Pricing
 
 Cost lines come from `pricing-config.json` in the repository root. The tools
@@ -75,6 +125,7 @@ tools still lay out and measure — they just report no costs.
 | --- | --- | --- |
 | `scripts/count_line_lengths.py` | Histogram of per-line character counts across the `.txt` files in a directory (per-file and combined tables). | [`docs/count_line_lengths.md`](docs/count_line_lengths.md) |
 | `scripts/split_lines_by_length.py` | Split the `.txt` files in a directory into per-length-range output files, optionally merging chosen ranges across all inputs. | [`docs/split_lines_by_length.md`](docs/split_lines_by_length.md) |
+| `scripts/inspect_cut_contours.py` | Inspect PDF files for CutContour and PerfCutContour spot colors and overprint settings. Useful for verifying cut-ready PDFs before sending to plotter. | |
 
 A typical vinyl label job flows: count line lengths → split label lists by length →
 generate a PDF per bucket with `generate` → consolidate metrics with

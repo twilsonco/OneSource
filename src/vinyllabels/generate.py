@@ -144,6 +144,19 @@ def build_argument_parser() -> argparse.ArgumentParser:
         type=str,
         help=_color_help("Color of sheet separator hairlines"),
     )
+    output.add_argument(
+        "--cut-ready-borders",
+        action=argparse.BooleanOptionalAction,
+        help="Draw label borders with CutContour spot color for Roland VersaWorks "
+        "plotter cutting. Enables overprint to avoid knockout artifacts. "
+        "Borders are hidden from ink nozzles and routed to the plotter blade.",
+    )
+    output.add_argument(
+        "--cut-ready-separators",
+        action=argparse.BooleanOptionalAction,
+        help="Draw sheet separators with PerfCutContour spot color for perforated "
+        "or through-cuts. Enables overprint and routes to the plotter blade.",
+    )
 
     text = parser.add_argument_group("text", "label text sizing")
     text.add_argument("--text-height", type=float, help="Cap height of the label text.")
@@ -209,7 +222,9 @@ def _apply_dataclass_defaults(parser: argparse.ArgumentParser) -> None:
         "--copies": "copies_per_label",
         "--border": "draw_border",
         "--border-line-width": "border_line_width_pt",
+        "--cut-ready-borders": "cut_ready_borders",
         "--sheet-separators": "draw_sheet_separators",
+        "--cut-ready-separators": "cut_ready_separators",
         "--text-height": "text_height_in",
         "--cap-height-ratio": "cap_height_ratio",
     }
@@ -326,8 +341,10 @@ def config_from_args(
         draw_border=bool(args.border),
         border_line_width_pt=float(args.border_line_width),
         border_color=border_color,
+        cut_ready_borders=bool(args.cut_ready_borders),
         draw_sheet_separators=bool(args.sheet_separators),
         sheet_separator_color=separator_color,
+        cut_ready_separators=bool(args.cut_ready_separators),
         text_color=text_color,
         text_height_in=float(args.text_height),
         cap_height_ratio=float(args.cap_height_ratio),

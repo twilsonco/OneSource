@@ -73,9 +73,11 @@ COPIES_PER_LABEL: int = 2
 # adjacent labels is stroked exactly once.
 DRAW_BORDER: bool = True
 BORDER_LINE_WIDTH_PT: float = 0.5  # ~0.5pt is the standard "hairline" weight
+CUT_READY_BORDERS: bool = True  # use CutContour spot color for plotter blade
 
 DRAW_SHEET_SEPARATORS: bool = True
 SHEET_SEPARATOR_COLOR_DEFAULT: str = "yellow"
+CUT_READY_SEPARATORS: bool = True  # use PerfCutContour spot color for perforated cuts
 TEXT_COLOR_DEFAULT: str = "black"
 BORDER_COLOR_DEFAULT: str = "magenta"
 
@@ -132,8 +134,10 @@ class JobConfig:
     draw_border: bool = DRAW_BORDER
     border_line_width_pt: float = BORDER_LINE_WIDTH_PT
     border_color: Color = parse_color(BORDER_COLOR_DEFAULT)
+    cut_ready_borders: bool = CUT_READY_BORDERS
     draw_sheet_separators: bool = DRAW_SHEET_SEPARATORS
     sheet_separator_color: Color = parse_color(SHEET_SEPARATOR_COLOR_DEFAULT)
+    cut_ready_separators: bool = CUT_READY_SEPARATORS
     text_color: Color = parse_color(TEXT_COLOR_DEFAULT)
 
     text_height_in: float = TEXT_HEIGHT_IN

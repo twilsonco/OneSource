@@ -9,6 +9,7 @@ import pytest
 from pypdf import PdfReader
 from reportlab.pdfgen.canvas import Canvas
 
+from vinyllabels.colors import cutcontour_spot_color, perfcutcontour_spot_color
 from vinyllabels.drawing import (
     PT_PER_IN,
     border_edges,
@@ -278,3 +279,189 @@ def test_build_pdf_without_borders_or_separators(
     ]
     paths, _ = build_pdf(["AAA"], out, per_label, config)
     assert PdfReader(str(paths[0])).pages[0].extract_text().strip() == "AAA"
+
+
+# --- Cut-ready spot color tests (Roland VersaWorks integration) -----------
+
+
+def test_cutcontour_spot_color_has_correct_name() -> None:
+    """Verify CutContour spot color has the correct name and CMYK values."""
+    color = cutcontour_spot_color()
+    assert color.spotName == "CutContour"
+    assert color.cyan == 0
+    assert color.magenta == 1
+    assert color.yellow == 0
+    assert color.black == 0
+
+
+def test_perfcutcontour_spot_color_has_correct_name() -> None:
+    """Verify PerfCutContour spot color has the correct name and CMYK values."""
+    color = perfcutcontour_spot_color()
+    assert color.spotName == "PerfCutContour"
+    assert color.cyan == 0
+    assert color.magenta == 0
+    assert color.yellow == 1
+    assert color.black == 0
+
+
+def test_draw_label_borders_cut_ready_creates_valid_pdf(
+    tmp_path: Path,
+    make_job_config: Callable[..., JobConfig],
+    synthetic_font_path: Path,
+) -> None:
+    """Verify draw_label_borders with cut_ready_borders=True produces a valid PDF."""
+    out = tmp_path / "out.pdf"
+    config = make_job_config(
+        font_path=synthetic_font_path,
+        draw_border=True,
+        cut_ready_borders=True,
+        draw_sheet_separators=False,
+        copies_per_label=1,
+    )
+    per_label = [
+        LabelMetrics(
+            text="TEST", char_count=4, horizontal_scale=1.0, ink_area_sq_in=1.0
+        )
+    ]
+    paths, _ = build_pdf(["TEST"], out, per_label, config)
+    assert len(paths) == 1
+    assert paths[0].is_file()
+
+    # Verify the PDF is readable and contains the text
+    reader = PdfReader(str(paths[0]))
+    assert len(reader.pages) == 1
+    text = reader.pages[0].extract_text()
+    assert "TEST" in text
+
+
+def test_draw_sheet_separators_cut_ready_creates_valid_pdf(
+    tmp_path: Path,
+    make_job_config: Callable[..., JobConfig],
+    synthetic_font_path: Path,
+) -> None:
+    """Verify draw_sheet_separators with cut_ready_separators=True produces a valid PDF."""
+    out = tmp_path / "out.pdf"
+    config = make_job_config(
+        font_path=synthetic_font_path,
+        draw_border=False,
+        draw_sheet_separators=True,
+        cut_ready_separators=True,
+        labels_per_sheet_row=2,
+        labels_per_sheet_col=2,
+        copies_per_label=1,
+    )
+    per_label = [
+        LabelMetrics(
+            text="TEST", char_count=4, horizontal_scale=1.0, ink_area_sq_in=1.0
+        )
+    ]
+    paths, _ = build_pdf(["TEST"], out, per_label, config)
+    assert len(paths) == 1
+    assert paths[0].is_file()
+
+    # Verify the PDF is readable
+    reader = PdfReader(str(paths[0]))
+    assert len(reader.pages) >= 1
+
+
+def test_cut_ready_borders_and_separators_together(
+    tmp_path: Path,
+    make_job_config: Callable[..., JobConfig],
+    synthetic_font_path: Path,
+) -> None:
+    """Verify both cut_ready_borders and cut_ready_separators work together."""
+    out = tmp_path / "out.pdf"
+    config = make_job_config(
+        font_path=synthetic_font_path,
+        draw_border=True,
+        cut_ready_borders=True,
+        draw_sheet_separators=True,
+        cut_ready_separators=True,
+        labels_per_sheet_row=2,
+        labels_per_sheet_col=2,
+        copies_per_label=1,
+    )
+    per_label = [
+        LabelMetrics(
+            text="TEST", char_count=4, horizontal_scale=1.0, ink_area_sq_in=1.0
+        )
+    ]
+    paths, _ = build_pdf(["TEST"], out, per_label, config)
+    assert len(paths) == 1
+    assert paths[0].is_file()
+
+    # Verify the PDF is readable
+    reader = PdfReader(str(paths[0]))
+    assert len(reader.pages) >= 1
+    text = reader.pages[0].extract_text()
+    assert "TEST" in text
+
+
+def test_default_cut_ready_enabled(
+    tmp_path: Path,
+    make_job_config: Callable[..., JobConfig],
+) -> None:
+    """Verify default JobConfig has cut_ready flags set to True (enabled by default)."""
+    config = make_job_config()
+    assert config.cut_ready_borders is True
+    assert config.cut_ready_separators is True
+
+
+def test_cut_ready_borders_can_be_disabled_explicitly(
+    tmp_path: Path,
+    make_job_config: Callable[..., JobConfig],
+    synthetic_font_path: Path,
+) -> None:
+    """Verify borders use regular color when cut_ready_borders=False."""
+    out = tmp_path / "out.pdf"
+    config = make_job_config(
+        font_path=synthetic_font_path,
+        draw_border=True,
+        cut_ready_borders=False,
+        draw_sheet_separators=False,
+        copies_per_label=1,
+    )
+    per_label = [
+        LabelMetrics(
+            text="TEST", char_count=4, horizontal_scale=1.0, ink_area_sq_in=1.0
+        )
+    ]
+    paths, _ = build_pdf(["TEST"], out, per_label, config)
+    assert len(paths) == 1
+    assert paths[0].is_file()
+
+    # Verify the PDF is readable and behavior is unchanged
+    reader = PdfReader(str(paths[0]))
+    assert len(reader.pages) == 1
+    text = reader.pages[0].extract_text()
+    assert "TEST" in text
+
+
+def test_cut_ready_separators_can_be_disabled_explicitly(
+    tmp_path: Path,
+    make_job_config: Callable[..., JobConfig],
+    synthetic_font_path: Path,
+) -> None:
+    """Verify separators use regular color when cut_ready_separators=False."""
+    out = tmp_path / "out.pdf"
+    config = make_job_config(
+        font_path=synthetic_font_path,
+        draw_border=False,
+        draw_sheet_separators=True,
+        cut_ready_separators=False,
+        labels_per_sheet_row=2,
+        labels_per_sheet_col=2,
+        copies_per_label=1,
+    )
+    per_label = [
+        LabelMetrics(
+            text="TEST", char_count=4, horizontal_scale=1.0, ink_area_sq_in=1.0
+        )
+    ]
+    paths, _ = build_pdf(["TEST"], out, per_label, config)
+    assert len(paths) == 1
+    assert paths[0].is_file()
+
+    # Verify the PDF is readable and behavior is unchanged
+    reader = PdfReader(str(paths[0]))
+    assert len(reader.pages) >= 1

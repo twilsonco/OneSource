@@ -11,6 +11,7 @@ from pathlib import Path
 
 from reportlab.pdfgen.canvas import Canvas
 
+from vinyllabels.colors import cutcontour_spot_color, perfcutcontour_spot_color
 from vinyllabels.fonts import register_bold_font
 from vinyllabels.layout import (
     JobConfig,
@@ -91,13 +92,24 @@ def draw_label_borders(
     size rotated 90° clockwise for vertical labels. Edges shared by adjacent
     labels are de-duplicated (see :func:`border_edges`) and every unique edge is
     stroked exactly once, in a single path.
+
+    When ``cut_ready_borders`` is True, borders use a CutContour spot color with
+    overprint enabled, recognized by Roland VersaWorks and other RIP software
+    for routing to the plotter blade (hidden from ink nozzles).
     """
     edges = border_edges(positions, config.foot_w_in, config.foot_h_in)
     if not edges:
         return
     c.saveState()
     c.setLineWidth(config.border_line_width_pt)
-    c.setStrokeColor(config.border_color)
+
+    if config.cut_ready_borders:
+        # Apply CutContour spot color and enable overprint to avoid knockout artifacts.
+        c.setStrokeColor(cutcontour_spot_color())
+        c.setStrokeOverprint(True)
+    else:
+        c.setStrokeColor(config.border_color)
+
     path = c.beginPath()
     for x0_in, y0_in, x1_in, y1_in in edges.values():
         path.moveTo(x0_in * PT_PER_IN, y0_in * PT_PER_IN)
@@ -112,10 +124,20 @@ def draw_sheet_separators(c: Canvas, config: JobConfig, page_h_in: float) -> Non
     Draws vertical separators (in horizontal gaps between sheet columns) and
     horizontal separators (in vertical gaps between sheet rows). Lines use the
     same ``border_line_width_pt`` weight as label borders.
+
+    When ``cut_ready_separators`` is True, separators use a PerfCutContour spot
+    color with overprint enabled, recognized by Roland VersaWorks and other RIP
+    software for routing perforated/through-cuts to the plotter blade.
     """
     c.saveState()
     c.setLineWidth(config.border_line_width_pt)
-    c.setStrokeColor(config.sheet_separator_color)
+
+    if config.cut_ready_separators:
+        # Apply PerfCutContour spot color and enable overprint to avoid knockout artifacts.
+        c.setStrokeColor(perfcutcontour_spot_color())
+        c.setStrokeOverprint(True)
+    else:
+        c.setStrokeColor(config.sheet_separator_color)
 
     # Vertical separators (in horizontal gaps between sheet columns).
     if config.sheets_per_row > 1 and config.horizontal_gap_in > 0:
