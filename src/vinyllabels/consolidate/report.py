@@ -69,13 +69,16 @@ class LabelRow:
     The listings walk every job's labels, so a row needs the job's display name,
     design size, and emitted PDF alongside the label's own metrics. ``pdf_file``
     is the basename of the PDF the label first appears in (blank when the job
-    recorded no PDFs).
+    recorded no PDFs), and ``pdf_number`` its 1-based ``File #`` in the
+    vendor-friendly (size, filename) order used by the file-breakdown tables and
+    the vendor drop folder (0 when the label maps to no emitted PDF).
     """
 
     job: str
     label: LabelMetrics
     size: LabelSize | None = None
     pdf_file: str = ""
+    pdf_number: int = 0
 
     @property
     def label_size(self) -> str:
@@ -660,14 +663,37 @@ def _pdf_file_by_label(report: JobReport) -> dict[str, str]:
     )
 
 
+def _pdf_file_numbers(reports: list[JobReport]) -> dict[str, int]:
+    """Map each emitted PDF basename to its 1-based ``File #``.
+
+    The numbering matches FILE BREAKDOWN, the vendor CSVs, and the ``N.pdf``
+    names in the vendor drop folder: every PDF that contributes file-breakdown
+    metrics, sorted by size then filename. PDFs without recorded metrics are
+    absent, so their rows leave the column blank.
+    """
+    return {
+        record.filename: file_num
+        for file_num, record in enumerate(
+            sort_pdf_records(build_pdf_file_records(reports)), start=1
+        )
+    }
+
+
 def _label_rows(reports: list[JobReport], directory: Path) -> list[LabelRow]:
     """Flatten every job's labels into rows tagged with the job, size, and PDF."""
+    file_numbers = _pdf_file_numbers(reports)
     rows: list[LabelRow] = []
     for report in reports:
         name = job_name(report.input_file, directory.parent)
         files = _pdf_file_by_label(report)
         rows.extend(
-            LabelRow(name, label, report.label_size, files.get(label.text, ""))
+            LabelRow(
+                name,
+                label,
+                report.label_size,
+                files.get(label.text, ""),
+                file_numbers.get(files.get(label.text, ""), 0),
+            )
             for label in report.per_label
         )
     return rows
@@ -688,6 +714,9 @@ def write_per_label_report(
     identity: list[TextColumn[LabelRow]] = [
         sized_column("Job", lambda row: row.job, rows),
         sized_column("Label Code", lambda row: row.label.text, rows),
+        TextColumn(
+            "File #", 6, lambda row: str(row.pdf_number) if row.pdf_number else ""
+        ),
         sized_column("File", lambda row: row.pdf_file, rows),
     ]
     if include_costs:
@@ -799,6 +828,7 @@ def _internal_xlsx_columns() -> list[XlsxColumn[LabelRow]]:
     """Column definitions for the internal per-label workbook."""
     return [
         XlsxColumn("Label Code", lambda row: row.label.text),
+        XlsxColumn("File #", lambda row: row.pdf_number or None),
         XlsxColumn("File", lambda row: row.pdf_file),
         XlsxColumn("Label Size (WxH)", lambda row: row.label_size),
         XlsxColumn("Char Count", lambda row: row.label.char_count),
@@ -820,6 +850,7 @@ def _customer_xlsx_columns() -> list[XlsxColumn[LabelRow]]:
     """Column definitions for the customer per-label workbook."""
     return [
         XlsxColumn("Label Code", lambda row: row.label.text),
+        XlsxColumn("File #", lambda row: row.pdf_number or None),
         XlsxColumn("File", lambda row: row.pdf_file),
         *[
             XlsxColumn(header, _cell(key), config_key)
@@ -854,12 +885,19 @@ def _workbook_sheets(
     reports: list[JobReport], directory: Path
 ) -> list[Sheet[LabelRow]]:
     """One sheet per job, named after its input file."""
+    file_numbers = _pdf_file_numbers(reports)
     sheets: list[Sheet[LabelRow]] = []
     for report in reports:
         name = job_name(report.input_file, directory.parent)
         files = _pdf_file_by_label(report)
         rows = [
-            LabelRow(name, label, report.label_size, files.get(label.text, ""))
+            LabelRow(
+                name,
+                label,
+                report.label_size,
+                files.get(label.text, ""),
+                file_numbers.get(files.get(label.text, ""), 0),
+            )
             for label in report.per_label
         ]
         sheets.append(Sheet(name, rows))

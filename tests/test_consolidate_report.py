@@ -436,17 +436,20 @@ def test_write_per_label_report_internal(tmp_path: Path) -> None:
     rule = "-" * len(lines[1])
     assert lines[0] == rule
     assert normalized(lines[1]) == (
-        "Job Label Code File Char Count Scale Ink (sq in) Ink (sq ft) Ink ($) "
-        "Substrate ($) Print Hrs Print ($) Labor Hrs Labor ($) Total ($) Unit ($)"
+        "Job Label Code File # File Char Count Scale Ink (sq in) Ink (sq ft) "
+        "Ink ($) Substrate ($) Print Hrs Print ($) Labor Hrs Labor ($) "
+        "Total ($) Unit ($)"
     )
     assert lines[2] == rule
     # Job a split into two PDFs: AA's first instance lands in a_2.pdf (the
-    # first range) and BB's in a_1.pdf; job b recorded no PDFs, so File is blank.
+    # first range) and BB's in a_1.pdf; the File # follows the vendor order
+    # (size, then name), so a_1.pdf is 1 and a_2.pdf is 2. Job b recorded no
+    # PDFs, so its File # and File are blank.
     assert normalized(lines[3]) == (
-        "a AA a_2.pdf 2 1.000 1.0000 0.0069 1.00 2.00 0.50 3.00 0.25 4.00 10.00 20.00"
+        "a AA 2 a_2.pdf 2 1.000 1.0000 0.0069 1.00 2.00 0.50 3.00 0.25 4.00 10.00 20.00"
     )
     # An unpriced label leaves every money cell blank.
-    assert normalized(lines[4]) == "a BB a_1.pdf 2 1.000 2.0000 0.0139"
+    assert normalized(lines[4]) == "a BB 1 a_1.pdf 2 1.000 2.0000 0.0139"
     assert normalized(lines[5]) == "b AA 2 1.000 1.0000 0.0069"
     assert lines[6] == rule
     assert out.read_text(encoding="utf-8").endswith(f"{rule}\n")
@@ -460,9 +463,9 @@ def test_write_per_label_report_customer(tmp_path: Path) -> None:
     lines = out.read_text(encoding="utf-8").splitlines()
     rule = "-" * len(lines[1])
     assert lines[0] == rule
-    assert normalized(lines[1]) == "Job Label Code File Unit Price ($)"
-    assert normalized(lines[3]) == "a AA a_2.pdf 20.00"
-    assert normalized(lines[4]) == "a BB a_1.pdf"
+    assert normalized(lines[1]) == "Job Label Code File # File Unit Price ($)"
+    assert normalized(lines[3]) == "a AA 2 a_2.pdf 20.00"
+    assert normalized(lines[4]) == "a BB 1 a_1.pdf"
     assert lines[6] == rule
 
 
@@ -481,12 +484,15 @@ def test_write_per_label_report_grows_identity_columns_to_fit(tmp_path: Path) ->
     write_per_label_report(jobs, out, tmp_path / "json")
     lines = out.read_text(encoding="utf-8").splitlines()
     # Identity columns are never clipped: each grows to the longest value,
-    # floored at the header width, so every row prints in full.
+    # floored at the header width, so every row prints in full. The PDF has no
+    # per-PDF metrics, so it has no File # and the column stays at its header
+    # width.
     assert normalized(lines[3]).startswith(f"{long_job} {long_code} {long_pdf}")
     cells = lines[3].split(" | ")
     assert len(cells[0]) == len(long_job)
     assert len(cells[1]) == len(long_code)
-    assert len(cells[2]) == len(long_pdf)
+    assert len(cells[2]) == len("File #")
+    assert len(cells[3]) == len(long_pdf)
 
 
 def test_write_per_label_report_maps_labels_to_the_first_pdf_without_per_pdf(
@@ -530,6 +536,7 @@ def test_write_per_label_report_xlsx_internal(tmp_path: Path) -> None:
     write_per_label_report_xlsx(_reports(tmp_path), out, tmp_path / "json")
     assert _header(out, "a") == [
         "Label Code",
+        "File #",
         "File",
         "Label Size (WxH)",
         "Char Count",
@@ -552,8 +559,9 @@ def test_write_per_label_report_xlsx_internal(tmp_path: Path) -> None:
     finally:
         workbook.close()
     rows = _sheet_rows(out, "a")
-    assert rows[1][:7] == [
+    assert rows[1][:8] == [
         "AA",
+        2,
         "a_2.pdf",
         "8x3",
         2,
@@ -561,12 +569,12 @@ def test_write_per_label_report_xlsx_internal(tmp_path: Path) -> None:
         1.0,
         pytest.approx(1.0 / 144.0),
     ]
-    assert rows[1][7:] == [1.0, 2.0, 0.5, 3.0, 0.25, 4.0, 10.0, 20.0]
+    assert rows[1][8:] == [1.0, 2.0, 0.5, 3.0, 0.25, 4.0, 10.0, 20.0]
     # The unpriced label still renders, with blank money cells.
-    assert rows[2][7:] == [None] * 8
-    # Job b recorded no PDFs, so its File cell is blank (openpyxl reads an
-    # empty string back as None).
-    assert _sheet_rows(out, "b")[1][:3] == ["AA", None, "4x2"]
+    assert rows[2][8:] == [None] * 8
+    # Job b recorded no PDFs, so its File # and File cells are blank (openpyxl
+    # reads an empty string back as None).
+    assert _sheet_rows(out, "b")[1][:4] == ["AA", None, None, "4x2"]
 
 
 def test_write_per_label_report_xlsx_customer_defaults(tmp_path: Path) -> None:
@@ -575,7 +583,12 @@ def test_write_per_label_report_xlsx_customer_defaults(tmp_path: Path) -> None:
         _reports(tmp_path), out, tmp_path / "json", include_costs=False
     )
     # Without a config, only the always-on columns plus the unit price show.
-    assert _header(out, "a") == ["Label Code", "File", "Unit Price ($)"]
+    assert _header(out, "a") == [
+        "Label Code",
+        "File #",
+        "File",
+        "Unit Price ($)",
+    ]
 
 
 def test_write_per_label_report_xlsx_customer_config(tmp_path: Path) -> None:
@@ -589,11 +602,12 @@ def test_write_per_label_report_xlsx_customer_config(tmp_path: Path) -> None:
     )
     assert _header(out, "a") == [
         "Label Code",
+        "File #",
         "File",
         "Label Size (WxH)",
         "Char Count",
     ]
-    assert _sheet_rows(out, "a")[1] == ["AA", "a_2.pdf", "8x3", 2]
+    assert _sheet_rows(out, "a")[1] == ["AA", 2, "a_2.pdf", "8x3", 2]
 
 
 def test_write_per_label_report_xlsx_customer_pricing_cells(
@@ -608,10 +622,16 @@ def test_write_per_label_report_xlsx_customer_pricing_cells(
         customer_report_config={"total_cost": True, "ink_sq_ft": True},
     )
     rows = _sheet_rows(out, "a")
-    assert rows[0] == ["Label Code", "File", "Ink (sq ft)", "Total Cost ($)"]
-    assert rows[1] == ["AA", "a_2.pdf", pytest.approx(1.0 / 144.0), 10.0]
+    assert rows[0] == [
+        "Label Code",
+        "File #",
+        "File",
+        "Ink (sq ft)",
+        "Total Cost ($)",
+    ]
+    assert rows[1] == ["AA", 2, "a_2.pdf", pytest.approx(1.0 / 144.0), 10.0]
     # A row without pricing has no value for the cost column.
-    assert rows[2] == ["BB", "a_1.pdf", pytest.approx(2.0 / 144.0), None]
+    assert rows[2] == ["BB", 1, "a_1.pdf", pytest.approx(2.0 / 144.0), None]
 
 
 def test_write_per_label_report_xlsx_customer_area_columns(
@@ -628,12 +648,13 @@ def test_write_per_label_report_xlsx_customer_area_columns(
     rows = _sheet_rows(out, "a")
     assert rows[0] == [
         "Label Code",
+        "File #",
         "File",
         "Label Size (sq in)",
         "Label Area (sq ft)",
     ]
     # The 8x3 design area, and the same figure in square feet.
-    assert rows[1] == ["AA", "a_2.pdf", 24.0, pytest.approx(24.0 / 144.0)]
+    assert rows[1] == ["AA", 2, "a_2.pdf", 24.0, pytest.approx(24.0 / 144.0)]
 
 
 def test_write_per_label_report_xlsx_sanitizes_sheet_names(
